@@ -30,9 +30,11 @@ class ConfigManager {
       monitoring: {
         checkIntervalMinutes: parseInt(process.env.CHECK_INTERVAL_MINUTES) || 5,
         timeoutSeconds: parseInt(process.env.TIMEOUT_SECONDS) || 10,
-        retryAttempts: 3
+        retryAttempts: 3,
+        customHealthCheckUrl: process.env.CUSTOM_HEALTH_CHECK_URL || ''
       },
       subscriptions: [],
+      manualNodes: [],
       notifications: {
         bark: {
           enabled: process.env.BARK_ENABLED === 'true',
@@ -102,6 +104,38 @@ class ConfigManager {
   updateNotificationSettings(type, settings) {
     if (this.config.notifications[type]) {
       this.config.notifications[type] = { ...this.config.notifications[type], ...settings };
+      return this.saveConfig();
+    }
+    return false;
+  }
+
+  addManualNode(node) {
+    if (!this.config.manualNodes) {
+      this.config.manualNodes = [];
+    }
+    this.config.manualNodes.push({
+      id: Date.now().toString(),
+      ...node,
+      addedAt: new Date().toISOString()
+    });
+    return this.saveConfig();
+  }
+
+  removeManualNode(id) {
+    if (!this.config.manualNodes) {
+      return false;
+    }
+    this.config.manualNodes = this.config.manualNodes.filter(node => node.id !== id);
+    return this.saveConfig();
+  }
+
+  updateManualNode(id, updates) {
+    if (!this.config.manualNodes) {
+      return false;
+    }
+    const index = this.config.manualNodes.findIndex(node => node.id === id);
+    if (index !== -1) {
+      this.config.manualNodes[index] = { ...this.config.manualNodes[index], ...updates };
       return this.saveConfig();
     }
     return false;

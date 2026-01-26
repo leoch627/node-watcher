@@ -23,6 +23,7 @@ class SchedulerService {
       const cfg = config.getConfig();
       const allNodes = [];
 
+      // Load nodes from subscriptions
       for (const subscription of cfg.subscriptions) {
         if (subscription.enabled !== false) {
           try {
@@ -36,8 +37,14 @@ class SchedulerService {
         }
       }
 
+      // Load manual nodes
+      if (cfg.manualNodes && cfg.manualNodes.length > 0) {
+        logger.info(`Loading ${cfg.manualNodes.length} manual nodes`);
+        allNodes.push(...cfg.manualNodes.filter(node => node.enabled !== false));
+      }
+
       this.nodes = allNodes;
-      logger.info(`Total nodes loaded: ${this.nodes.length}`);
+      logger.info(`Total nodes loaded: ${this.nodes.length} (${cfg.subscriptions.length} subscriptions + ${cfg.manualNodes?.length || 0} manual)`);
       return allNodes;
     } catch (error) {
       logger.error('Error loading nodes:', error);

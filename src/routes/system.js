@@ -45,7 +45,7 @@ router.get('/config', (req, res) => {
 // Update monitoring settings
 router.put('/monitoring', (req, res) => {
   try {
-    const { checkIntervalMinutes, timeoutSeconds, retryAttempts } = req.body;
+    const { checkIntervalMinutes, timeoutSeconds, retryAttempts, customHealthCheckUrl } = req.body;
     const cfg = config.getConfig();
 
     if (checkIntervalMinutes) {
@@ -56,6 +56,9 @@ router.put('/monitoring', (req, res) => {
     }
     if (retryAttempts !== undefined) {
       cfg.monitoring.retryAttempts = parseInt(retryAttempts);
+    }
+    if (customHealthCheckUrl !== undefined) {
+      cfg.monitoring.customHealthCheckUrl = customHealthCheckUrl;
     }
 
     config.updateConfig(cfg);

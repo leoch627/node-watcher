@@ -2,6 +2,7 @@ const net = require('net');
 const http = require('http');
 const https = require('https');
 const logger = require('../utils/logger');
+const config = require('../utils/config');
 
 class MonitorService {
   constructor() {
@@ -13,15 +14,27 @@ class MonitorService {
     const startTime = Date.now();
     
     try {
-      // For most proxy protocols, we'll do a TCP connection check
-      const isOnline = await this.checkTcpConnection(node.address, node.port, timeout);
+      const cfg = config.getConfig();
+      const customHealthCheckUrl = cfg.monitoring?.customHealthCheckUrl;
+      
+      let isOnline;
+      
+      // If custom health check URL is configured, use HTTP check
+      if (customHealthCheckUrl && customHealthCheckUrl.trim()) {
+        isOnline = await this.checkHttpEndpoint(customHealthCheckUrl, timeout);
+      } else {
+        // Otherwise use TCP connection check
+        isOnline = await this.checkTcpConnection(node.address, node.port, timeout);
+      }
+      
       const responseTime = Date.now() - startTime;
       
       const status = {
         online: isOnline,
         responseTime: isOnline ? responseTime : null,
         lastCheck: new Date().toISOString(),
-        error: null
+        error: null,
+        checkMethod: customHealthCheckUrl ? 'http' : 'tcp'
       };
 
       this.updateNodeStatus(node, status);
@@ -32,7 +45,8 @@ class MonitorService {
         online: false,
         responseTime: null,
         lastCheck: new Date().toISOString(),
-        error: error.message
+        error: error.message,
+        checkMethod: 'tcp'
       };
 
       this.updateNodeStatus(node, status);

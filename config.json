@@ -5,9 +5,21 @@
   "monitoring": {
     "checkIntervalMinutes": 5,
     "timeoutSeconds": 10,
-    "retryAttempts": 3
+    "retryAttempts": 3,
+    "customHealthCheckUrl": "https://www.google.com"
   },
   "subscriptions": [],
+  "manualNodes": [
+    {
+      "id": "1769414721167",
+      "name": "Test Node HK",
+      "protocol": "vmess",
+      "address": "hk.example.com",
+      "port": 443,
+      "enabled": true,
+      "addedAt": "2026-01-26T08:05:21.167Z"
+    }
+  ],
   "notifications": {
     "bark": {
       "enabled": false,
