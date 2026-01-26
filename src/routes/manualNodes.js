@@ -40,7 +40,7 @@ router.post('/', (req, res) => {
     }
 
     // Validate port
-    const portNum = parseInt(port);
+    const portNum = parseInt(port, 10);
     if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
       return res.status(400).json({
         success: false,
@@ -76,7 +76,7 @@ router.put('/:id', (req, res) => {
 
     // Validate port if provided
     if (updates.port) {
-      const portNum = parseInt(updates.port);
+      const portNum = parseInt(updates.port, 10);
       if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
         return res.status(400).json({
           success: false,

@@ -44,7 +44,7 @@ class SchedulerService {
       }
 
       this.nodes = allNodes;
-      logger.info(`Total nodes loaded: ${this.nodes.length} (${cfg.subscriptions.length} subscriptions + ${cfg.manualNodes?.length || 0} manual)`);
+      logger.info(`Total nodes loaded: ${this.nodes.length} (${cfg.subscriptions?.length || 0} subscriptions + ${cfg.manualNodes?.length || 0} manual)`);
       return allNodes;
     } catch (error) {
       logger.error('Error loading nodes:', error);

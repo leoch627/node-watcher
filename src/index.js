@@ -66,10 +66,10 @@ if (!fs.existsSync(logsDir)) {
 
 app.listen(PORT, async () => {
   logger.info(`Node Watcher server started on port ${PORT}`);
-  console.log(`\n🚀 Node Watcher is running!`);
-  console.log(`📊 Dashboard: http://localhost:${PORT}`);
-  console.log(`🔌 API: http://localhost:${PORT}/api`);
-  console.log(`📈 Public Stats: http://localhost:${PORT}/api/nodes/public\n`);
+  logger.info('🚀 Node Watcher is running!');
+  logger.info(`📊 Dashboard: http://localhost:${PORT}`);
+  logger.info(`🔌 API: http://localhost:${PORT}/api`);
+  logger.info(`📈 Public Stats: http://localhost:${PORT}/api/nodes/public`);
   
   // Initialize scheduler
   try {
