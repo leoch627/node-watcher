@@ -34,6 +34,7 @@ class ConfigManager {
         customHealthCheckUrl: process.env.CUSTOM_HEALTH_CHECK_URL || ''
       },
       subscriptions: [],
+      excludeNodes: [],
       manualNodes: [],
       notifications: {
         bark: {
@@ -91,6 +92,17 @@ class ConfigManager {
       addedAt: new Date().toISOString()
     });
     return this.saveConfig();
+  }
+
+  addNodeExclusion(nodeName) {
+    if (!this.config.excludeNodes) {
+      this.config.excludeNodes = [];
+    }
+    if (!this.config.excludeNodes.includes(nodeName)) {
+      this.config.excludeNodes.push(nodeName);
+      return this.saveConfig();
+    }
+    return true;
   }
 
   removeSubscription(id) {

@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const subscriptionService = require('./subscription');
 const monitorService = require('./monitor');
 const notificationService = require('./notification');
+const mihomoService = require('./mihomo');
 const config = require('../utils/config');
 const logger = require('../utils/logger');
 
@@ -28,8 +29,31 @@ class SchedulerService {
         if (subscription.enabled !== false) {
           try {
             logger.info(`Fetching subscription: ${subscription.name}`);
-            const nodes = await subscriptionService.getNodes(subscription.url);
-            logger.info(`Loaded ${nodes.length} nodes from ${subscription.name}`);
+            const result = await subscriptionService.getNodes(subscription.url);
+            
+            let nodes = [];
+            if (result.type === 'clash_direct') {
+                logger.info(`Loaded ${result.proxies.length} proxies directly from Clash YAML`);
+                // Normalize slightly for internal usage if needed, but keeping mostly raw
+                nodes = result.proxies.map(p => ({
+                    ...p, 
+                    // Ensure internal code uses 'name'
+                    name: p.name || 'Unknown', 
+                    // Map type to protocol for any internal checks expecting 'protocol'
+                    protocol: p.type 
+                }));
+            } else if (result.type === 'parsed') {
+                nodes = result.nodes;
+                logger.info(`Loaded ${nodes.length} nodes from ${subscription.name}`);
+            } else if (Array.isArray(result)) {
+                // Legacy fallback if service returns array directly
+                nodes = result;
+                logger.info(`Loaded ${nodes.length} nodes from ${subscription.name}`);
+            }
+
+            // Tag nodes with subscription source
+            nodes = nodes.map(n => ({ ...n, subscription: subscription.name }));
+
             allNodes.push(...nodes);
           } catch (error) {
             logger.error(`Error loading subscription ${subscription.name}:`, error.message);
@@ -43,9 +67,19 @@ class SchedulerService {
         allNodes.push(...cfg.manualNodes.filter(node => node.enabled !== false));
       }
 
-      this.nodes = allNodes;
-      logger.info(`Total nodes loaded: ${this.nodes.length} (${cfg.subscriptions?.length || 0} subscriptions + ${cfg.manualNodes?.length || 0} manual)`);
-      return allNodes;
+      // Filter excluded nodes
+      const excludedNames = cfg.excludeNodes || [];
+      const filteredNodes = allNodes.filter(n => !excludedNames.includes(n.name));
+
+      this.nodes = filteredNodes;
+      
+      // Update Mihomo configuration with new nodes
+      if (this.nodes.length > 0) {
+         await mihomoService.updateProxies(this.nodes);
+      }
+
+      logger.info(`Total nodes loaded: ${this.nodes.length} (Excluded: ${allNodes.length - this.nodes.length})`);
+      return this.nodes;
     } catch (error) {
       logger.error('Error loading nodes:', error);
       return [];

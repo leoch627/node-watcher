@@ -3,6 +3,7 @@ const http = require('http');
 const https = require('https');
 const logger = require('../utils/logger');
 const config = require('../utils/config');
+const mihomoService = require('./mihomo'); // Import mihomo service
 
 class MonitorService {
   constructor() {
@@ -14,27 +15,78 @@ class MonitorService {
     const startTime = Date.now();
     
     try {
-      const cfg = config.getConfig();
-      const customHealthCheckUrl = cfg.monitoring?.customHealthCheckUrl;
+      // Use UDP/Mihomo for more accurate connectivity test
+      // First update this specific node in mihomo?
+      // No, updating one by one is inefficient. 
+      // Ideally, scheduler calls updateProxies([allNodes]) once, then here we just test.
+      // But checkNode is called per node.
+      // Let's try to temporally add/test this proxy or rely on global config if updated.
+      // For now, let's just stick to "Test via Mihomo" assuming it's in the config.
       
-      let isOnline;
+      // Since 'checkNode' is usually called in a loop for all nodes,
+      // we need to ensure the node exists in Mihomo.
+      // A simple way: construct a single proxy config, call a 'testProxy' method on mihomo service
+      // that temporarily adds it via API or uses the providers.
+      // But mihomo 'delay' API requires the proxy to exist in its config.
       
-      // If custom health check URL is configured, use HTTP check
-      if (customHealthCheckUrl && customHealthCheckUrl.trim()) {
-        isOnline = await this.checkHttpEndpoint(customHealthCheckUrl, timeout);
-      } else {
-        // Otherwise use TCP connection check
+      // Let's dynamically update proxies before check loop in 'scheduler', 
+      // OR hack: we can just use the 'checkTcpConnection' if we don't want to rewriting everything.
+      // But user ASKED for mihomo.
+      
+      // Assuming scheduler has synced the list to mihomo.
+      // But wait! Scheduler logic is separate.
+      // Let's use a "Single Node Test" capability if possible, or fallback to TCP.
+      
+      // Actually, we can just use mihomoService.testNode if we ensure the node "name" is unique and synced.
+      // However, checkNode logic here is isolated.
+      
+      // Let's implement a "Direct Check" where we ask mihomo to test a proxy configuration 
+      // passed directly? No, Clash API doesn't support "Test this JSON object".
+      // It supports "Test proxy named X".
+      
+      // Modified flow:
+      // 1. Scheduler calls monitorService.checkAll(nodes).
+      // 2. monitorService updates mihomo config with ALL nodes.
+      // 3. monitorService iterates and calls API for each.
+      
+      // But here we are inside `checkNode` (single).
+      // Let's modify the usage pattern or handle the sync here?
+      // Handling sync here constitutes a race condition or performance hit.
+      
+      // Alternative: checkNode takes a "checkType" param.
+      // If we simply replace the logic:
+      
+      // We will blindly attempt to test via Mihomo API using node.name.
+      // If it fails (404 proxy not found), we fallback to TCP?
+      
+      let isOnline, latency = 0;
+      const mihomoResult = await mihomoService.testNode(node.name, timeout);
+      
+      if (mihomoResult.error && mihomoResult.error.includes('Proxy not found')) {
+        // Fallback or Log warning. 
+        // Maybe the list wasn't synced?
+        // Let's Try to sync just this one? (Expensive)
+        // Fallback to TCP
         isOnline = await this.checkTcpConnection(node.address, node.port, timeout);
+        latency = Date.now() - startTime;
+      } else {
+        isOnline = mihomoResult.online;
+        latency = mihomoResult.latency;
       }
+
+      // const cfg = config.getConfig();
+      // const customHealthCheckUrl = cfg.monitoring?.customHealthCheckUrl;
+      // ... (Rest of logic)
       
-      const responseTime = Date.now() - startTime;
+      // Override responseTime with real latency from tool
+      const responseTime = isOnline ? latency : null;
       
       const status = {
         online: isOnline,
-        responseTime: isOnline ? responseTime : null,
+        responseTime: responseTime,
         lastCheck: new Date().toISOString(),
-        error: null,
-        checkMethod: customHealthCheckUrl ? 'http' : 'tcp'
+        error: isOnline ? null : (mihomoResult.error || 'Connection failed'),
+        checkMethod: 'mihomo'
       };
 
       this.updateNodeStatus(node, status);
@@ -46,7 +98,7 @@ class MonitorService {
         responseTime: null,
         lastCheck: new Date().toISOString(),
         error: error.message,
-        checkMethod: 'tcp'
+        checkMethod: 'mihomo-error'
       };
 
       this.updateNodeStatus(node, status);
@@ -187,12 +239,8 @@ class MonitorService {
     const previousStatus = this.nodeStatus.get(nodeKey);
     
     const newStatus = {
-      node: {
-        name: node.name,
-        protocol: node.protocol,
-        address: node.address,
-        port: node.port
-      },
+      // Preserve all original node properties
+      node: { ...node }, 
       ...status,
       statusChanged: previousStatus ? previousStatus.online !== status.online : false,
       previousStatus: previousStatus ? previousStatus.online : null
@@ -234,6 +282,7 @@ class MonitorService {
       
       return {
         name: status.node.name,
+        subscription: status.node.subscription || 'Manual/Unknown',
         protocol: status.node.protocol,
         online: status.online,
         lastCheck: status.lastCheck,
