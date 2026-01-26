@@ -49,13 +49,34 @@ router.put('/monitoring', (req, res) => {
     const cfg = config.getConfig();
 
     if (checkIntervalMinutes) {
-      cfg.monitoring.checkIntervalMinutes = parseInt(checkIntervalMinutes);
+      const interval = parseInt(checkIntervalMinutes, 10);
+      if (isNaN(interval) || interval < 1) {
+        return res.status(400).json({
+          success: false,
+          error: 'Check interval must be a positive number'
+        });
+      }
+      cfg.monitoring.checkIntervalMinutes = interval;
     }
     if (timeoutSeconds) {
-      cfg.monitoring.timeoutSeconds = parseInt(timeoutSeconds);
+      const timeout = parseInt(timeoutSeconds, 10);
+      if (isNaN(timeout) || timeout < 1) {
+        return res.status(400).json({
+          success: false,
+          error: 'Timeout must be a positive number'
+        });
+      }
+      cfg.monitoring.timeoutSeconds = timeout;
     }
     if (retryAttempts !== undefined) {
-      cfg.monitoring.retryAttempts = parseInt(retryAttempts);
+      const retries = parseInt(retryAttempts, 10);
+      if (isNaN(retries) || retries < 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'Retry attempts must be a non-negative number'
+        });
+      }
+      cfg.monitoring.retryAttempts = retries;
     }
     if (customHealthCheckUrl !== undefined) {
       cfg.monitoring.customHealthCheckUrl = customHealthCheckUrl;

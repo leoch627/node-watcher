@@ -28,8 +28,8 @@ class ConfigManager {
         port: process.env.PORT || 3000
       },
       monitoring: {
-        checkIntervalMinutes: parseInt(process.env.CHECK_INTERVAL_MINUTES) || 5,
-        timeoutSeconds: parseInt(process.env.TIMEOUT_SECONDS) || 10,
+        checkIntervalMinutes: parseInt(process.env.CHECK_INTERVAL_MINUTES, 10) || 5,
+        timeoutSeconds: parseInt(process.env.TIMEOUT_SECONDS, 10) || 10,
         retryAttempts: 3,
         customHealthCheckUrl: process.env.CUSTOM_HEALTH_CHECK_URL || ''
       },
@@ -43,7 +43,7 @@ class ConfigManager {
         email: {
           enabled: process.env.EMAIL_ENABLED === 'true',
           host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-          port: parseInt(process.env.EMAIL_PORT) || 587,
+          port: parseInt(process.env.EMAIL_PORT, 10) || 587,
           secure: process.env.EMAIL_SECURE === 'true',
           auth: {
             user: process.env.EMAIL_USER || '',

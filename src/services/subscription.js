@@ -81,7 +81,7 @@ class SubscriptionService {
         protocol: 'vmess',
         name: config.ps || config.remarks || 'Unknown',
         address: config.add || config.address,
-        port: parseInt(config.port),
+        port: parseInt(config.port, 10),
         id: config.id,
         alterId: config.aid || 0,
         network: config.net || 'tcp',
@@ -105,7 +105,7 @@ class SubscriptionService {
         protocol: 'vless',
         name: decodeURIComponent(urlObj.hash.substring(1)) || 'Unknown',
         address: urlObj.hostname,
-        port: parseInt(urlObj.port),
+        port: parseInt(urlObj.port, 10),
         id: urlObj.username,
         network: params.get('type') || 'tcp',
         security: params.get('security') || 'none',
@@ -150,7 +150,7 @@ class SubscriptionService {
         protocol: 'trojan',
         name: decodeURIComponent(urlObj.hash.substring(1)) || 'Unknown',
         address: urlObj.hostname,
-        port: parseInt(urlObj.port),
+        port: parseInt(urlObj.port, 10),
         password: urlObj.username,
         sni: params.get('sni') || urlObj.hostname,
         type: params.get('type') || 'tcp'
@@ -176,7 +176,7 @@ class SubscriptionService {
         protocol: 'shadowsocks',
         name: name ? decodeURIComponent(name) : 'Unknown',
         address: address,
-        port: parseInt(port),
+        port: parseInt(port, 10),
         method: method,
         password: password
       };
