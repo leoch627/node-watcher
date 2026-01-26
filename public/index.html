@@ -649,25 +649,53 @@
                 return;
             }
 
-            nodeList.innerHTML = nodes.map(node => {
-                const statusClass = node.online ? 'online' : 'offline';
-                const statusText = node.online ? '在线 / Online' : '离线 / Offline';
-                
+            // Group by subscription
+            const groups = {};
+            nodes.forEach(node => {
+                const sub = node.subscription || '其他 / Other';
+                if (!groups[sub]) groups[sub] = [];
+                groups[sub].push(node);
+            });
+
+            const html = Object.keys(groups).map(subName => {
+                const groupNodes = groups[subName];
+                const nodesHtml = groupNodes.map(node => {
+                    const statusClass = node.online ? 'online' : 'offline';
+                    const statusText = node.online ? '在线 / Online' : '离线 / Offline';
+                    
+                    return `
+                        <div class="node-item ${statusClass}">
+                            <div class="node-header">
+                                <div class="node-name">${escapeHtml(node.name)}</div>
+                                <div class="node-actions" style="display: flex; gap: 10px; align-items: center;">
+                                    <div class="node-status ${statusClass}">${statusText}</div>
+                                    <button class="btn btn-danger" style="padding: 2px 10px; font-size: 0.8rem;" onclick="deleteNode('${escapeHtml(node.name).replace(/'/g, "\\'")}')">删除</button>
+                                </div>
+                            </div>
+                            <div class="node-details">
+                                <div class="node-detail">📡 协议: ${node.protocol}</div>
+                                <div class="node-detail">⏱️ 响应: ${node.responseTime ? node.responseTime + 'ms' : 'N/A'}</div>
+                                <div class="node-detail">🕐 更新: ${new Date(node.lastCheck).toLocaleString('zh-CN')}</div>
+                            </div>
+                            ${renderUptime(node.uptime)}
+                        </div>
+                    `;
+                }).join('');
+
                 return `
-                    <div class="node-item ${statusClass}">
-                        <div class="node-header">
-                            <div class="node-name">${escapeHtml(node.name)}</div>
-                            <div class="node-status ${statusClass}">${statusText}</div>
+                    <div class="subscription-group" style="margin-bottom: 25px;">
+                        <h3 style="margin-bottom: 15px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb; color: #4b5563;">
+                            📂 ${escapeHtml(subName)} 
+                            <span style="font-size: 0.8em; font-weight: normal; color: #9ca3af; margin-left: 10px;">(${groupNodes.length} nodes)</span>
+                        </h3>
+                        <div class="node-list">
+                            ${nodesHtml}
                         </div>
-                        <div class="node-details">
-                            <div class="node-detail">📡 协议: ${node.protocol}</div>
-                            <div class="node-detail">⏱️ 响应: ${node.responseTime ? node.responseTime + 'ms' : 'N/A'}</div>
-                            <div class="node-detail">🕐 更新: ${new Date(node.lastCheck).toLocaleString('zh-CN')}</div>
-                        </div>
-                        ${renderUptime(node.uptime)}
                     </div>
                 `;
             }).join('');
+
+            nodeList.innerHTML = html;
         }
 
         function renderUptime(uptime) {
@@ -995,6 +1023,31 @@
             } catch (error) {
                 console.error('Error adding manual node:', error);
                 alert('添加失败 / Failed to add node');
+            }
+        }
+
+        async function deleteNode(name) {
+            if (!confirm(`确定要删除并屏蔽节点 "${name}" 吗？\nAre you sure to delete and exclude node "${name}"?`)) {
+                return;
+            }
+
+            try {
+                const encodedName = encodeURIComponent(name);
+                const response = await fetch(`/api/nodes/${encodedName}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert('删除成功 / Deleted successfully');
+                    loadDashboard();
+                } else {
+                    alert('删除失败: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Error deleting node:', error);
+                alert('删除失败 / Failed to delete');
             }
         }
 

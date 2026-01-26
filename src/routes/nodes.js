@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const monitorService = require('../services/monitor');
 const schedulerService = require('../services/scheduler');
+const config = require('../utils/config');
 
 // Get all node status
 router.get('/', (req, res) => {
@@ -68,6 +69,30 @@ router.post('/reload', async (req, res) => {
     res.json({
       success: true,
       message: 'Subscriptions reloaded',
+      nodeCount: nodes.length
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Delete (Exclude) a node
+router.delete('/:name', async (req, res) => {
+  try {
+    const { name } = req.params;
+    const decodedName = decodeURIComponent(name);
+    
+    config.addNodeExclusion(decodedName);
+    
+    // Reload to apply exclusion
+    const nodes = await schedulerService.reloadSubscriptions();
+    
+    res.json({
+      success: true,
+      message: `Node '${decodedName}' removed successfully`,
       nodeCount: nodes.length
     });
   } catch (error) {

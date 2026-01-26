@@ -6,6 +6,7 @@ const path = require('path');
 const logger = require('./utils/logger');
 const config = require('./utils/config');
 const schedulerService = require('./services/scheduler');
+const mihomoService = require('./services/mihomo');
 
 // Import routes
 const subscriptionsRouter = require('./routes/subscriptions');
@@ -70,6 +71,13 @@ app.listen(PORT, async () => {
   logger.info(`📊 Dashboard: http://localhost:${PORT}`);
   logger.info(`🔌 API: http://localhost:${PORT}/api`);
   logger.info(`📈 Public Stats: http://localhost:${PORT}/api/nodes/public`);
+
+  // Start Mihomo Core
+  try {
+     await mihomoService.start();
+  } catch (e) {
+     logger.error("Failed to start Mihomo service", e);
+  }
   
   // Initialize scheduler
   try {
@@ -83,6 +91,7 @@ app.listen(PORT, async () => {
 // Graceful shutdown
 process.on('SIGTERM', () => {
   logger.info('SIGTERM received, shutting down gracefully');
+  mihomoService.stop();
   schedulerService.stopMonitoring();
   process.exit(0);
 });

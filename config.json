@@ -3,12 +3,20 @@
     "port": 3000
   },
   "monitoring": {
-    "checkIntervalMinutes": 5,
+    "checkIntervalMinutes": 1,
     "timeoutSeconds": 10,
     "retryAttempts": 3,
     "customHealthCheckUrl": "https://www.google.com"
   },
-  "subscriptions": [],
+  "subscriptions": [
+    {
+      "id": "1769417357291",
+      "name": "1",
+      "url": "https://host.leiterup.de/genshinimpact/huawei/v50tome?token=84d40f86c34066628892bea1f9ba7c99",
+      "enabled": true,
+      "addedAt": "2026-01-26T08:49:17.291Z"
+    }
+  ],
   "manualNodes": [
     {
       "id": "1769414721167",
