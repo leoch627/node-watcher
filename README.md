@@ -7,6 +7,8 @@ V2Board Node Monitoring System - Automatically fetch subscriptions and continuou
 ## ✨ 功能特性 / Features
 
 - 🔄 **自动订阅拉取** - 支持 V2Board 订阅格式，自动解析节点
+- ➕ **手动添加节点** - 支持手动添加单个节点进行监控
+- 🌐 **自定义测活网址** - 可配置通过访问指定URL来检测节点连通性
 - 📊 **实时监控** - 持续监控节点在线状态和响应时间
 - 📈 **在线率统计** - 24小时/7天/30天在线率统计，访客可查看
 - 🔔 **多种通知方式** - 支持 Bark、Email、Telegram 三种通知方式
@@ -125,8 +127,9 @@ docker stop node-watcher
 
 - 📊 **监控面板** - 查看所有节点状态和在线率
 - 📡 **订阅管理** - 添加/删除 V2Board 订阅
+- ➕ **手动节点** - 手动添加单个节点进行监控
 - 🔔 **通知设置** - 配置 Bark/Email/Telegram 通知
-- ⚙️ **系统设置** - 调整检测间隔和超时时间
+- ⚙️ **系统设置** - 调整检测间隔、超时时间和自定义测活URL
 
 ### 公开访问接口 / Public API
 
@@ -181,6 +184,7 @@ NODE_ENV=production                 # 运行环境
 # 监控配置
 CHECK_INTERVAL_MINUTES=5            # 检测间隔（分钟）
 TIMEOUT_SECONDS=10                  # 超时时间（秒）
+CUSTOM_HEALTH_CHECK_URL=            # 自定义测活URL（可选）
 
 # Bark 通知（iOS）
 BARK_ENABLED=false                  # 是否启用
@@ -213,13 +217,25 @@ TELEGRAM_CHAT_ID=                  # Chat ID
   "monitoring": {
     "checkIntervalMinutes": 5,
     "timeoutSeconds": 10,
-    "retryAttempts": 3
+    "retryAttempts": 3,
+    "customHealthCheckUrl": "https://www.google.com"
   },
   "subscriptions": [
     {
       "id": "1234567890",
       "name": "我的订阅",
       "url": "https://example.com/api/v1/client/subscribe?token=xxx",
+      "enabled": true,
+      "addedAt": "2024-01-01T00:00:00.000Z"
+    }
+  ],
+  "manualNodes": [
+    {
+      "id": "0987654321",
+      "name": "香港节点 01",
+      "protocol": "vmess",
+      "address": "hk01.example.com",
+      "port": 443,
       "enabled": true,
       "addedAt": "2024-01-01T00:00:00.000Z"
     }
@@ -290,6 +306,13 @@ TELEGRAM_CHAT_ID=                  # Chat ID
 - `POST /api/subscriptions` - 添加订阅
 - `DELETE /api/subscriptions/:id` - 删除订阅
 
+### 手动节点 / Manual Nodes
+
+- `GET /api/manual-nodes` - 获取手动节点列表
+- `POST /api/manual-nodes` - 添加手动节点
+- `PUT /api/manual-nodes/:id` - 更新手动节点
+- `DELETE /api/manual-nodes/:id` - 删除手动节点
+
 ### 通知设置 / Notifications
 
 - `GET /api/notifications` - 获取通知配置
@@ -321,10 +344,26 @@ TELEGRAM_CHAT_ID=                  # Chat ID
 ## 🔍 监控原理 / Monitoring Principle
 
 1. 定期从 V2Board 订阅链接拉取节点信息
-2. 通过 TCP 连接测试节点可用性
-3. 记录节点状态和响应时间
-4. 计算不同时间段的在线率（24h/7d/30d）
-5. 节点状态变化时发送通知
+2. 支持手动添加单个节点进行监控
+3. 通过 TCP 连接测试节点可用性（默认）
+4. 可配置自定义测活URL，通过访问指定网址来检测连通性
+5. 记录节点状态和响应时间
+6. 计算不同时间段的在线率（24h/7d/30d）
+7. 节点状态变化时发送通知
+
+### 测活方式 / Health Check Methods
+
+#### 默认模式 - TCP 连接检测
+直接尝试连接节点的 IP:Port，成功连接即视为在线。
+
+#### 自定义URL模式 - HTTP 访问检测
+配置自定义测活URL后（如 `https://www.google.com`），系统会通过代理访问该URL来判断节点是否可用。这种方式更接近真实使用场景。
+
+**配置方法**：
+在系统设置中填入"自定义测活网址"，例如：
+- `https://www.google.com`
+- `https://www.cloudflare.com`
+- `http://www.gstatic.com/generate_204`
 
 ## 📊 数据持久化 / Data Persistence
 

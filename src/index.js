@@ -12,6 +12,7 @@ const subscriptionsRouter = require('./routes/subscriptions');
 const nodesRouter = require('./routes/nodes');
 const notificationsRouter = require('./routes/notifications');
 const systemRouter = require('./routes/system');
+const manualNodesRouter = require('./routes/manualNodes');
 
 const app = express();
 
@@ -28,6 +29,7 @@ app.use('/api/subscriptions', subscriptionsRouter);
 app.use('/api/nodes', nodesRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/system', systemRouter);
+app.use('/api/manual-nodes', manualNodesRouter);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

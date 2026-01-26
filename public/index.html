@@ -379,6 +379,7 @@
         <div class="tabs">
             <button class="tab active" onclick="showTab('dashboard')">📊 监控面板 / Dashboard</button>
             <button class="tab" onclick="showTab('subscriptions')">📡 订阅管理 / Subscriptions</button>
+            <button class="tab" onclick="showTab('manual-nodes')">➕ 手动节点 / Manual Nodes</button>
             <button class="tab" onclick="showTab('notifications')">🔔 通知设置 / Notifications</button>
             <button class="tab" onclick="showTab('settings')">⚙️ 系统设置 / Settings</button>
         </div>
@@ -415,6 +416,46 @@
             <div>
                 <h3 style="margin-bottom: 15px;">已有订阅 / Current Subscriptions</h3>
                 <div id="subscriptionList">
+                    <div class="loading">加载中... / Loading...</div>
+                </div>
+            </div>
+        </div>
+
+        <div id="manual-nodes" class="content-card">
+            <h2 style="margin-bottom: 20px;">手动节点管理 / Manual Node Management</h2>
+            
+            <div style="margin-bottom: 30px;">
+                <h3 style="margin-bottom: 15px;">添加节点 / Add Node</h3>
+                <div class="form-group">
+                    <label>节点名称 / Node Name</label>
+                    <input type="text" id="manualNodeName" placeholder="例如: 香港节点 01">
+                </div>
+                <div class="form-group">
+                    <label>协议 / Protocol</label>
+                    <select id="manualNodeProtocol">
+                        <option value="vmess">VMess</option>
+                        <option value="vless">VLESS</option>
+                        <option value="trojan">Trojan</option>
+                        <option value="shadowsocks">Shadowsocks</option>
+                        <option value="http">HTTP</option>
+                        <option value="https">HTTPS</option>
+                        <option value="socks5">SOCKS5</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>地址 / Address</label>
+                    <input type="text" id="manualNodeAddress" placeholder="example.com 或 192.168.1.1">
+                </div>
+                <div class="form-group">
+                    <label>端口 / Port</label>
+                    <input type="number" id="manualNodePort" placeholder="443" min="1" max="65535">
+                </div>
+                <button class="btn" onclick="addManualNode()">➕ 添加节点 / Add Node</button>
+            </div>
+
+            <div>
+                <h3 style="margin-bottom: 15px;">已添加的节点 / Added Nodes</h3>
+                <div id="manualNodeList">
                     <div class="loading">加载中... / Loading...</div>
                 </div>
             </div>
@@ -503,6 +544,7 @@
             
             <div id="settingsMessage"></div>
 
+            <h3 style="margin-bottom: 15px;">监控设置 / Monitoring Settings</h3>
             <div class="form-group">
                 <label>检测间隔（分钟）/ Check Interval (minutes)</label>
                 <input type="number" id="checkInterval" min="1" placeholder="5">
@@ -510,6 +552,14 @@
             <div class="form-group">
                 <label>超时时间（秒）/ Timeout (seconds)</label>
                 <input type="number" id="timeout" min="1" placeholder="10">
+            </div>
+            <div class="form-group">
+                <label>自定义测活网址 / Custom Health Check URL (可选)</label>
+                <input type="text" id="customHealthCheckUrl" placeholder="https://www.google.com 或留空使用默认TCP检测">
+                <small style="color: #666; display: block; margin-top: 5px;">
+                    填入后将通过访问此URL来测试节点连通性，而不是TCP连接。<br>
+                    When set, nodes will be checked by accessing this URL instead of TCP connection.
+                </small>
             </div>
             <button class="btn" onclick="saveSettings()">💾 保存设置 / Save Settings</button>
             
@@ -548,6 +598,8 @@
 
             if (tabName === 'subscriptions') {
                 loadSubscriptions();
+            } else if (tabName === 'manual-nodes') {
+                loadManualNodes();
             } else if (tabName === 'notifications') {
                 loadNotificationSettings();
             } else if (tabName === 'settings') {
@@ -838,6 +890,7 @@
                 if (data.success) {
                     document.getElementById('checkInterval').value = data.config.monitoring.checkIntervalMinutes;
                     document.getElementById('timeout').value = data.config.monitoring.timeoutSeconds;
+                    document.getElementById('customHealthCheckUrl').value = data.config.monitoring.customHealthCheckUrl || '';
                 }
             } catch (error) {
                 console.error('Error loading system settings:', error);
@@ -847,7 +900,8 @@
         async function saveSettings() {
             const settings = {
                 checkIntervalMinutes: parseInt(document.getElementById('checkInterval').value),
-                timeoutSeconds: parseInt(document.getElementById('timeout').value)
+                timeoutSeconds: parseInt(document.getElementById('timeout').value),
+                customHealthCheckUrl: document.getElementById('customHealthCheckUrl').value
             };
 
             try {
@@ -867,6 +921,104 @@
             } catch (error) {
                 console.error('Error saving settings:', error);
                 showMessage('settingsMessage', '保存失败 / Failed to save', 'error');
+            }
+        }
+
+        async function loadManualNodes() {
+            try {
+                const response = await fetch('/api/manual-nodes');
+                const data = await response.json();
+
+                if (data.success) {
+                    renderManualNodes(data.nodes);
+                }
+            } catch (error) {
+                console.error('Error loading manual nodes:', error);
+            }
+        }
+
+        function renderManualNodes(nodes) {
+            const list = document.getElementById('manualNodeList');
+            
+            if (nodes.length === 0) {
+                list.innerHTML = '<div class="loading">暂无手动添加的节点 / No manual nodes</div>';
+                return;
+            }
+
+            list.innerHTML = nodes.map(node => `
+                <div class="subscription-item">
+                    <div class="subscription-info">
+                        <h4>${escapeHtml(node.name)}</h4>
+                        <p>协议: ${node.protocol} | 地址: ${escapeHtml(node.address)}:${node.port}</p>
+                        <p style="font-size: 0.8rem; color: #999;">添加时间: ${new Date(node.addedAt).toLocaleString('zh-CN')}</p>
+                    </div>
+                    <button class="btn btn-danger" onclick="deleteManualNode('${node.id}')">删除 / Delete</button>
+                </div>
+            `).join('');
+        }
+
+        async function addManualNode() {
+            const name = document.getElementById('manualNodeName').value;
+            const protocol = document.getElementById('manualNodeProtocol').value;
+            const address = document.getElementById('manualNodeAddress').value;
+            const port = document.getElementById('manualNodePort').value;
+
+            if (!name || !address || !port) {
+                alert('请填写所有必填项 / Please fill in all required fields');
+                return;
+            }
+
+            const portNum = parseInt(port);
+            if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+                alert('端口号必须在 1-65535 之间 / Port must be between 1-65535');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/manual-nodes', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, protocol, address, port: portNum, enabled: true })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    document.getElementById('manualNodeName').value = '';
+                    document.getElementById('manualNodeAddress').value = '';
+                    document.getElementById('manualNodePort').value = '';
+                    loadManualNodes();
+                    alert('节点添加成功，请重新加载订阅以生效 / Node added successfully, please reload subscriptions');
+                } else {
+                    alert('添加失败: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Error adding manual node:', error);
+                alert('添加失败 / Failed to add node');
+            }
+        }
+
+        async function deleteManualNode(id) {
+            if (!confirm('确定要删除这个节点吗？ / Are you sure to delete this node?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/manual-nodes/${id}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    loadManualNodes();
+                    alert('删除成功 / Deleted successfully');
+                } else {
+                    alert('删除失败: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Error deleting manual node:', error);
+                alert('删除失败 / Failed to delete');
             }
         }
 
