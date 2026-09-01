@@ -3,6 +3,7 @@ const { HttpsProxyAgent } = require('https-proxy-agent');
 const mihomoService = require('./mihomo');
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36';
+const DISNEY_BROWSER_TOKEN = 'ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84';
 
 function result(status, detail, region = null) {
   return { status, detail, region };
@@ -10,6 +11,33 @@ function result(status, detail, region = null) {
 
 function parseTrace(body) {
   return Object.fromEntries(String(body).trim().split('\n').map(line => line.split('=', 2)));
+}
+
+function extractRegion(body, fallbackRegion = null) {
+  const text = String(body || '');
+  return text.match(/"INNERTUBE_CONTEXT_GL"\s*:\s*"([A-Z]{2})"/)?.[1]
+    || text.match(/"currentTerritory"\s*:\s*"([A-Z]{2})"/)?.[1]
+    || text.match(/"countryCode"\s*:\s*"([A-Z]{2})"/)?.[1]
+    || text.match(/"id"\s*:\s*"([A-Z]{2})"[^{}]{0,200}"countryName"/)?.[1]
+    || fallbackRegion;
+}
+
+function netflixUnavailable(response) {
+  const body = String(response?.data || '');
+  return [403, 404, 451].includes(response?.status)
+    || /Oh no!|page.?not.?found|not available in your (?:country|region)/i.test(body);
+}
+
+function classifyChatGPT(apiResponse, appResponse, fallbackRegion = null) {
+  const apiBody = String(apiResponse?.data || '');
+  const appBody = String(appResponse?.data || '');
+  if (!apiBody || !appBody) return result('error', 'Empty response', fallbackRegion);
+  const webBlocked = /unsupported_country/i.test(apiBody);
+  const appBlocked = /VPN/i.test(appBody);
+  if (webBlocked && appBlocked) return result('blocked', 'Web and app unavailable', fallbackRegion);
+  if (!webBlocked && appBlocked) return result('limited', 'Web browser only', fallbackRegion);
+  if (webBlocked && !appBlocked) return result('limited', 'Mobile app only', fallbackRegion);
+  return result('unlocked', 'Web and app available', fallbackRegion);
 }
 
 class MediaService {
@@ -41,33 +69,50 @@ class MediaService {
   }
 
   async checkNetflix(client, fallbackRegion) {
-    const response = await client.get('https://www.netflix.com/title/81280792');
-    const body = String(response.data || '');
-    if ([403, 451].includes(response.status)) return result('blocked', `HTTP ${response.status}`);
-    if (response.status === 404 || /page.?not.?found/i.test(body)) {
-      const original = await client.get('https://www.netflix.com/title/70143836');
-      return original.status === 200
-        ? result('limited', 'Originals only', fallbackRegion)
-        : result('blocked', `HTTP ${original.status}`);
-    }
-    if (response.status === 200) return result('unlocked', 'Full catalog', fallbackRegion);
-    return result('error', `HTTP ${response.status}`);
+    // Detection signals adapted from lmc999/RegionRestrictionCheck (AGPL-3.0).
+    const [catalog, secondTitle] = await Promise.all([
+      client.get('https://www.netflix.com/title/81280792'),
+      client.get('https://www.netflix.com/title/70143836')
+    ]);
+    const catalogUnavailable = netflixUnavailable(catalog);
+    const secondUnavailable = netflixUnavailable(secondTitle);
+    const region = extractRegion(catalog.data, fallbackRegion);
+    if (catalogUnavailable && secondUnavailable) return result('limited', 'Originals only', region);
+    if (!catalogUnavailable || !secondUnavailable) return result('unlocked', 'Full catalog', region);
+    return result('blocked', 'Unavailable', region);
   }
 
   async checkYouTube(client, fallbackRegion) {
     const response = await client.get('https://www.youtube.com/premium');
     const body = String(response.data || '');
     if (response.status !== 200) return result('blocked', `HTTP ${response.status}`);
+    if (/www\.google\.cn/i.test(body)) return result('blocked', 'Unavailable', 'CN');
     if (/Premium is not available in your country/i.test(body)) return result('blocked', 'Unavailable');
-    const region = body.match(/"countryCode":"([A-Z]{2})"/)?.[1]
-      || body.match(/"GL":"([A-Z]{2})"/)?.[1]
-      || fallbackRegion;
-    return /youtube premium/i.test(body)
+    const region = extractRegion(body, fallbackRegion);
+    return /ad-free/i.test(body)
       ? result('unlocked', 'Available', region)
-      : result('limited', 'Region uncertain', region);
+      : result('error', 'Page response could not be classified', region);
   }
 
   async checkDisney(client, fallbackRegion) {
+    const device = await client.post('https://disney.api.edge.bamgrid.com/devices', {
+      deviceFamily: 'browser',
+      applicationRuntime: 'chrome',
+      deviceProfile: 'windows',
+      attributes: {}
+    }, {
+      headers: {
+        Authorization: `Bearer ${DISNEY_BROWSER_TOKEN}`,
+        'Content-Type': 'application/json; charset=UTF-8'
+      }
+    });
+    const deviceBody = String(device.data || '');
+    if (device.status === 403 || /403 ERROR|forbidden-location/i.test(deviceBody)) {
+      return result('blocked', 'IP blocked by Disney+', fallbackRegion);
+    }
+    if (!/"assertion"\s*:/i.test(deviceBody)) {
+      return result('error', `Device check HTTP ${device.status}`, fallbackRegion);
+    }
     const response = await client.get('https://www.disneyplus.com/');
     const body = String(response.data || '');
     if ([403, 451].includes(response.status)) return result('blocked', `HTTP ${response.status}`);
@@ -82,19 +127,22 @@ class MediaService {
   async checkPrimeVideo(client, fallbackRegion) {
     const response = await client.get('https://www.primevideo.com/');
     const body = String(response.data || '');
-    if (/Service area restriction|not available in your location/i.test(body)) {
+    const region = extractRegion(body, fallbackRegion);
+    if (/isServiceRestricted|Service area restriction|not available in your location/i.test(body)) {
       return result('blocked', 'Unavailable', fallbackRegion);
     }
-    return response.status >= 200 && response.status < 400
-      ? result('unlocked', 'Available', fallbackRegion)
-      : result('error', `HTTP ${response.status}`);
+    if (region) return result('unlocked', 'Available', region);
+    return result('error', `Unclassified response (HTTP ${response.status})`, fallbackRegion);
   }
 
   async checkChatGPT(client, fallbackRegion) {
-    const response = await client.get('https://chatgpt.com/cdn-cgi/trace');
-    if (response.status !== 200) return result('blocked', `HTTP ${response.status}`);
-    const trace = parseTrace(response.data);
-    return result('unlocked', 'Reachable', trace.loc || fallbackRegion);
+    const [apiResponse, appResponse] = await Promise.all([
+      client.get('https://api.openai.com/compliance/cookie_requirements', {
+        headers: { Authorization: 'Bearer null', Origin: 'https://platform.openai.com' }
+      }),
+      client.get('https://ios.chat.openai.com/')
+    ]);
+    return classifyChatGPT(apiResponse, appResponse, fallbackRegion);
   }
 
   async checkNode(node) {
@@ -123,3 +171,6 @@ class MediaService {
 
 module.exports = new MediaService();
 module.exports.parseTrace = parseTrace;
+module.exports.extractRegion = extractRegion;
+module.exports.netflixUnavailable = netflixUnavailable;
+module.exports.classifyChatGPT = classifyChatGPT;

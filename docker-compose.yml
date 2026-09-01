@@ -12,4 +12,16 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
+      AUTH_USERNAME: ${AUTH_USERNAME:-admin}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:?Set AUTH_PASSWORD in .env}
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:-}
+      AUTH_SESSION_TTL_HOURS: ${AUTH_SESSION_TTL_HOURS:-24}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      MIHOMO_HTTP_PORT: ${MIHOMO_HTTP_PORT:-23333}
+      MIHOMO_SOCKS_PORT: ${MIHOMO_SOCKS_PORT:-23334}
+      MIHOMO_CONTROLLER_PORT: ${MIHOMO_CONTROLLER_PORT:-23335}
+      MIHOMO_SECRET: ${MIHOMO_SECRET:-node-watcher-secret}
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped

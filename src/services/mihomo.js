@@ -8,14 +8,15 @@ const logger = require('../utils/logger');
 const GROUP_NAME = 'NODE-WATCHER';
 
 class MihomoService {
-  constructor() {
-    this.controllerPort = Number(process.env.MIHOMO_CONTROLLER_PORT || 9090);
-    this.apiUrl = process.env.MIHOMO_API_URL || `http://127.0.0.1:${this.controllerPort}`;
-    this.secret = process.env.MIHOMO_SECRET || 'node-watcher-secret';
-    this.httpPort = Number(process.env.MIHOMO_HTTP_PORT || 7890);
+  constructor(options = {}) {
+    this.httpPort = Number(options.httpPort ?? process.env.MIHOMO_HTTP_PORT ?? 23333);
+    this.socksPort = Number(options.socksPort ?? process.env.MIHOMO_SOCKS_PORT ?? this.httpPort + 1);
+    this.controllerPort = Number(options.controllerPort ?? process.env.MIHOMO_CONTROLLER_PORT ?? this.httpPort + 2);
+    this.apiUrl = options.apiUrl || process.env.MIHOMO_API_URL || `http://127.0.0.1:${this.controllerPort}`;
+    this.secret = options.secret || process.env.MIHOMO_SECRET || 'node-watcher-secret';
     this.process = null;
     this.ready = false;
-    this.workDir = path.join(process.cwd(), 'data', 'mihomo');
+    this.workDir = options.workDir || path.join(process.cwd(), 'data', 'mihomo');
     this.configPath = path.join(this.workDir, 'config.yaml');
   }
 
@@ -27,7 +28,7 @@ class MihomoService {
     const proxies = nodes.map(node => node.proxy || this.convertLegacyNode(node)).filter(Boolean);
     const config = {
       port: this.httpPort,
-      'socks-port': this.httpPort + 1,
+      'socks-port': this.socksPort,
       'allow-lan': false,
       mode: 'rule',
       'log-level': process.env.MIHOMO_LOG_LEVEL || 'warning',
@@ -154,3 +155,4 @@ class MihomoService {
 
 module.exports = new MihomoService();
 module.exports.GROUP_NAME = GROUP_NAME;
+module.exports.MihomoService = MihomoService;
