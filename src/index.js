@@ -61,7 +61,7 @@ app.use((err, req, res, next) => {
 });
 
 // Start server
-const PORT = config.getConfig().server.port || 3000;
+const PORT = Number(process.env.PORT) || config.getConfig().server.port || 3000;
 
 // Create logs directory if it doesn't exist
 const fs = require('fs');
