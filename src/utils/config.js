@@ -147,7 +147,14 @@ class ConfigManager {
 
   updateNotificationSettings(type, settings) {
     if (this.config.notifications[type]) {
-      this.config.notifications[type] = { ...this.config.notifications[type], ...settings };
+      const current = this.config.notifications[type];
+      this.config.notifications[type] = {
+        ...current,
+        ...settings,
+        ...(type === 'email' && settings.auth ? {
+          auth: { ...current.auth, ...settings.auth }
+        } : {})
+      };
       return this.saveConfig();
     }
     return false;

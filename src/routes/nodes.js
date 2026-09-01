@@ -14,7 +14,8 @@ router.get('/', (req, res) => {
       summary: {
         total: status.length,
         online: monitorService.getOnlineNodes().length,
-        offline: monitorService.getOfflineNodes().length
+        offline: monitorService.getOfflineNodes().length,
+        pending: monitorService.getPendingNodes().length
       }
     });
   } catch (error) {
@@ -34,8 +35,9 @@ router.get('/public', (req, res) => {
       stats: stats,
       summary: {
         total: stats.length,
-        online: stats.filter(s => s.online).length,
-        offline: stats.filter(s => !s.online).length
+        online: stats.filter(s => s.online === true).length,
+        offline: stats.filter(s => s.online === false).length,
+        pending: stats.filter(s => s.online == null).length
       }
     });
   } catch (error) {

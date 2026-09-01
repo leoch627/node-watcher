@@ -107,7 +107,7 @@ class MonitorService {
       node: this.publicNode(node),
       ...status,
       media: previous?.media || null,
-      statusChanged: Boolean(previous && previous.online !== status.online),
+      statusChanged: typeof previous?.online === 'boolean' && previous.online !== status.online,
       previousStatus: previous?.online ?? null
     };
     this.nodeStatus.set(node.id, value);
@@ -125,8 +125,9 @@ class MonitorService {
   }
 
   getAllStatus() { return Array.from(this.nodeStatus.values()); }
-  getOfflineNodes() { return this.getAllStatus().filter(status => !status.online); }
-  getOnlineNodes() { return this.getAllStatus().filter(status => status.online); }
+  getOfflineNodes() { return this.getAllStatus().filter(status => status.online === false); }
+  getOnlineNodes() { return this.getAllStatus().filter(status => status.online === true); }
+  getPendingNodes() { return this.getAllStatus().filter(status => status.online == null); }
 
   getPublicStats() {
     return this.getAllStatus().map(status => ({
@@ -139,9 +140,27 @@ class MonitorService {
     }));
   }
 
-  retainNodes(nodes) {
+  syncNodes(nodes) {
     const ids = new Set(nodes.map(node => node.id));
     for (const id of this.nodeStatus.keys()) if (!ids.has(id)) this.nodeStatus.delete(id);
+    for (const node of nodes) {
+      const previous = this.nodeStatus.get(node.id);
+      if (previous) {
+        this.nodeStatus.set(node.id, { ...previous, node: this.publicNode(node) });
+        continue;
+      }
+      this.nodeStatus.set(node.id, {
+        node: this.publicNode(node),
+        online: null,
+        responseTime: null,
+        lastCheck: null,
+        error: null,
+        checkMethod: null,
+        media: null,
+        statusChanged: false,
+        previousStatus: null
+      });
+    }
   }
 }
 

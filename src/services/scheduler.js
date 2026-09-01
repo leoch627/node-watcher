@@ -83,7 +83,7 @@ class SchedulerService {
     }
     this.nodes = Array.from(unique.values());
     this.sourceStatus = allResults.map(item => item.status);
-    monitorService.retainNodes(this.nodes);
+    monitorService.syncNodes(this.nodes);
     await mihomoService.updateProxies(this.nodes);
     logger.info(`Loaded ${this.nodes.length} nodes from ${allResults.length} sources`);
     return this.nodes;
@@ -111,7 +111,7 @@ class SchedulerService {
       const results = await monitorService.checkAll(this.nodes, timeout, concurrency,
         completed => { job.completed = completed; });
       for (const result of results) {
-        if (result?.statusChanged && !result.online) {
+        if (result?.statusChanged) {
           await notificationService.sendNotification(result.node, result);
         }
       }
@@ -180,6 +180,7 @@ class SchedulerService {
       isRunning: Boolean(this.timer), totalNodes: this.nodes.length,
       onlineNodes: monitorService.getOnlineNodes().length,
       offlineNodes: monitorService.getOfflineNodes().length,
+      pendingNodes: monitorService.getPendingNodes().length,
       sourceStatus: this.sourceStatus,
       jobs: { health: this.healthJob, media: this.mediaJob },
       mihomoReady: mihomoService.ready

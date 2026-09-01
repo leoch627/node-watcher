@@ -4,17 +4,21 @@ const logger = require('../utils/logger');
 const config = require('../utils/config');
 
 class NotificationService {
-  constructor() {
+  constructor(dependencies = {}) {
+    this.http = dependencies.http || axios;
+    this.mailer = dependencies.mailer || nodemailer;
+    this.config = dependencies.config || config;
     this.emailTransporter = null;
     this.initEmailTransporter();
   }
 
   initEmailTransporter() {
-    const emailConfig = config.getConfig().notifications.email;
+    const emailConfig = this.config.getConfig().notifications.email;
+    this.emailTransporter = null;
     
     if (emailConfig.enabled && emailConfig.auth.user) {
       try {
-        this.emailTransporter = nodemailer.createTransport({
+        this.emailTransporter = this.mailer.createTransport({
           host: emailConfig.host,
           port: emailConfig.port,
           secure: emailConfig.secure,
@@ -31,41 +35,47 @@ class NotificationService {
   }
 
   async sendNotification(node, status) {
-    const notifications = config.getConfig().notifications;
-    const results = [];
+    if (!status.statusChanged) return [];
+    const notifications = this.config.getConfig().notifications;
+    const tasks = [];
+    if (notifications.bark.enabled) tasks.push(this.sendBarkNotification(node, status));
+    if (notifications.email.enabled) tasks.push(this.sendEmailNotification(node, status));
+    if (notifications.telegram.enabled) tasks.push(this.sendTelegramNotification(node, status));
+    return Promise.all(tasks);
+  }
 
-    // Only send notification on status change to offline
-    if (status.statusChanged && !status.online) {
-      if (notifications.bark.enabled) {
-        results.push(await this.sendBarkNotification(node, status));
-      }
-
-      if (notifications.email.enabled) {
-        results.push(await this.sendEmailNotification(node, status));
-      }
-
-      if (notifications.telegram.enabled) {
-        results.push(await this.sendTelegramNotification(node, status));
-      }
-    }
-
-    return results;
+  getAlert(node, status) {
+    const online = Boolean(status.online);
+    const state = online ? '已恢复' : '已离线';
+    const title = online ? '节点恢复通知' : '节点离线告警';
+    const address = node.server || node.address || '-';
+    const checkedAt = new Date(status.lastCheck || Date.now()).toLocaleString('zh-CN', { hour12: false });
+    return {
+      online,
+      title,
+      message: [
+        `节点: ${node.name}`,
+        `状态: ${state}`,
+        `协议: ${node.protocol || '-'}`,
+        `地址: ${address}:${node.port || '-'}`,
+        `检测时间: ${checkedAt}`,
+        ...(!online ? [`错误: ${status.error || '连接超时'}`] : [])
+      ].join('\n')
+    };
   }
 
   async sendBarkNotification(node, status) {
     try {
-      const barkConfig = config.getConfig().notifications.bark;
+      const barkConfig = this.config.getConfig().notifications.bark;
       
       if (!barkConfig.url) {
         throw new Error('Bark URL not configured');
       }
 
-      const title = '节点离线通知 / Node Offline Alert';
-      const message = `节点 ${node.name} 已离线\nNode ${node.name} is offline\n协议: ${node.protocol}\n地址: ${node.address}:${node.port}`;
-      
-      const url = `${barkConfig.url}/${encodeURIComponent(title)}/${encodeURIComponent(message)}`;
-      
-      await axios.get(url, { timeout: 10000 });
+      const alert = this.getAlert(node, status);
+      const baseUrl = barkConfig.url.replace(/\/$/, '');
+      const url = `${baseUrl}/${encodeURIComponent(alert.title)}/${encodeURIComponent(alert.message)}`;
+      await this.http.get(url, { timeout: 10000, params: { group: 'Node Watcher' } });
       
       logger.info(`Bark notification sent for node: ${node.name}`);
       return { service: 'bark', success: true };
@@ -77,7 +87,7 @@ class NotificationService {
 
   async sendEmailNotification(node, status) {
     try {
-      const emailConfig = config.getConfig().notifications.email;
+      const emailConfig = this.config.getConfig().notifications.email;
       
       if (!this.emailTransporter) {
         this.initEmailTransporter();
@@ -87,20 +97,17 @@ class NotificationService {
         throw new Error('Email transporter not initialized');
       }
 
+      const alert = this.getAlert(node, status);
+      const color = alert.online ? '#047857' : '#b91c1c';
       const mailOptions = {
         from: emailConfig.from,
         to: emailConfig.to,
-        subject: `节点离线通知 - ${node.name}`,
+        subject: `[Node Watcher] ${alert.title} - ${node.name}`,
         html: `
-          <h2>节点离线通知 / Node Offline Alert</h2>
-          <p><strong>节点名称 / Node Name:</strong> ${node.name}</p>
-          <p><strong>协议 / Protocol:</strong> ${node.protocol}</p>
-          <p><strong>地址 / Address:</strong> ${node.address}</p>
-          <p><strong>端口 / Port:</strong> ${node.port}</p>
-          <p><strong>检测时间 / Check Time:</strong> ${status.lastCheck}</p>
-          <p><strong>错误信息 / Error:</strong> ${status.error || 'Connection timeout'}</p>
+          <h2 style="color:${color}">${escapeHtml(alert.title)}</h2>
+          ${alert.message.split('\n').map(line => `<p>${escapeHtml(line)}</p>`).join('')}
           <hr>
-          <p style="color: #666; font-size: 12px;">This is an automated message from Node Watcher</p>
+          <p style="color:#666;font-size:12px">Node Watcher 自动通知</p>
         `
       };
 
@@ -116,28 +123,21 @@ class NotificationService {
 
   async sendTelegramNotification(node, status) {
     try {
-      const telegramConfig = config.getConfig().notifications.telegram;
+      const telegramConfig = this.config.getConfig().notifications.telegram;
       
       if (!telegramConfig.botToken || !telegramConfig.chatId) {
         throw new Error('Telegram bot token or chat ID not configured');
       }
 
-      const message = `
-🔴 *节点离线通知 / Node Offline Alert*
-
-*节点名称:* ${node.name}
-*协议:* ${node.protocol}
-*地址:* ${node.address}:${node.port}
-*检测时间:* ${new Date(status.lastCheck).toLocaleString('zh-CN')}
-*错误:* ${status.error || 'Connection timeout'}
-      `.trim();
+      const alert = this.getAlert(node, status);
+      const message = `<b>${alert.online ? '🟢' : '🔴'} ${escapeHtml(alert.title)}</b>\n\n${escapeHtml(alert.message)}`;
 
       const url = `https://api.telegram.org/bot${telegramConfig.botToken}/sendMessage`;
       
-      await axios.post(url, {
+      await this.http.post(url, {
         chat_id: telegramConfig.chatId,
         text: message,
-        parse_mode: 'Markdown'
+        parse_mode: 'HTML'
       }, { timeout: 10000 });
 
       logger.info(`Telegram notification sent for node: ${node.name}`);
@@ -176,4 +176,13 @@ class NotificationService {
   }
 }
 
-module.exports = new NotificationService();
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, character => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[character]);
+}
+
+const notificationService = new NotificationService();
+module.exports = notificationService;
+module.exports.NotificationService = NotificationService;
+module.exports.escapeHtml = escapeHtml;
