@@ -45,7 +45,7 @@ router.get('/config', (req, res) => {
 // Update monitoring settings
 router.put('/monitoring', (req, res) => {
   try {
-    const { checkIntervalMinutes, timeoutSeconds, retryAttempts, customHealthCheckUrl } = req.body;
+    const { checkIntervalMinutes, timeoutSeconds, retryAttempts, concurrency, customHealthCheckUrl } = req.body;
     const cfg = config.getConfig();
 
     if (checkIntervalMinutes) {
@@ -77,6 +77,13 @@ router.put('/monitoring', (req, res) => {
         });
       }
       cfg.monitoring.retryAttempts = retries;
+    }
+    if (concurrency !== undefined) {
+      const value = parseInt(concurrency, 10);
+      if (isNaN(value) || value < 1 || value > 32) {
+        return res.status(400).json({ success: false, error: 'Concurrency must be between 1 and 32' });
+      }
+      cfg.monitoring.concurrency = value;
     }
     if (customHealthCheckUrl !== undefined) {
       cfg.monitoring.customHealthCheckUrl = customHealthCheckUrl;

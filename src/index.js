@@ -14,13 +14,15 @@ const nodesRouter = require('./routes/nodes');
 const notificationsRouter = require('./routes/notifications');
 const systemRouter = require('./routes/system');
 const manualNodesRouter = require('./routes/manualNodes');
+const importsRouter = require('./routes/imports');
+const reportsRouter = require('./routes/reports');
 
 const app = express();
 
 // Middleware
 app.use(cors());
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json({ limit: '4mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '4mb' }));
 
 // Serve static files
 app.use(express.static(path.join(__dirname, '../public')));
@@ -31,13 +33,16 @@ app.use('/api/nodes', nodesRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/system', systemRouter);
 app.use('/api/manual-nodes', manualNodesRouter);
+app.use('/api/imports', importsRouter);
+app.use('/api/reports', reportsRouter);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({
     success: true,
     message: 'Node Watcher is running',
-    version: '1.0.0'
+    version: '2.0.0',
+    mihomoReady: mihomoService.ready
   });
 });
 
@@ -84,7 +89,7 @@ app.listen(PORT, async () => {
     await schedulerService.init();
     logger.info('Scheduler initialized successfully');
   } catch (error) {
-    logger.error('Error initializing scheduler:', error);
+    logger.error(`Error initializing scheduler: ${error.message}`);
   }
 });
 
@@ -98,6 +103,7 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   logger.info('SIGINT received, shutting down gracefully');
+  mihomoService.stop();
   schedulerService.stopMonitoring();
   process.exit(0);
 });

@@ -1,0 +1,11 @@
+node_modules
+.git
+.github
+.env
+config.json
+data
+logs
+public
+npm-debug.log*
+sub_*
+*.sqlite

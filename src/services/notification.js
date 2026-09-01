@@ -14,7 +14,7 @@ class NotificationService {
     
     if (emailConfig.enabled && emailConfig.auth.user) {
       try {
-        this.emailTransporter = nodemailer.createTransporter({
+        this.emailTransporter = nodemailer.createTransport({
           host: emailConfig.host,
           port: emailConfig.port,
           secure: emailConfig.secure,

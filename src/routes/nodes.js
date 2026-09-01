@@ -49,10 +49,11 @@ router.get('/public', (req, res) => {
 // Trigger manual health check
 router.post('/check', async (req, res) => {
   try {
-    await schedulerService.runHealthCheck();
+    const job = await schedulerService.runHealthCheck({ reload: req.body?.reload === true });
     res.json({
       success: true,
-      message: 'Health check initiated'
+      message: 'Health check completed',
+      job
     });
   } catch (error) {
     res.status(500).json({
@@ -60,6 +61,20 @@ router.post('/check', async (req, res) => {
       error: error.message
     });
   }
+});
+
+router.post('/media-check', (req, res) => {
+  try {
+    const nodeIds = Array.isArray(req.body?.nodeIds) ? req.body.nodeIds : [];
+    const job = schedulerService.startMediaCheck(nodeIds);
+    res.status(202).json({ success: true, job });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/jobs', (req, res) => {
+  res.json({ success: true, jobs: schedulerService.getStatus().jobs });
 });
 
 // Reload subscriptions
@@ -80,19 +95,17 @@ router.post('/reload', async (req, res) => {
 });
 
 // Delete (Exclude) a node
-router.delete('/:name', async (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
-    const { name } = req.params;
-    const decodedName = decodeURIComponent(name);
-    
-    config.addNodeExclusion(decodedName);
+    const { id } = req.params;
+    config.addNodeExclusion(id);
     
     // Reload to apply exclusion
     const nodes = await schedulerService.reloadSubscriptions();
     
     res.json({
       success: true,
-      message: `Node '${decodedName}' removed successfully`,
+      message: 'Node excluded successfully',
       nodeCount: nodes.length
     });
   } catch (error) {

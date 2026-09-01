@@ -1,8 +1,9 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const logger = require('./logger');
 
-const CONFIG_FILE = path.join(__dirname, '../../config.json');
+const CONFIG_FILE = process.env.CONFIG_FILE || path.join(__dirname, '../../config.json');
 
 class ConfigManager {
   constructor() {
@@ -31,9 +32,11 @@ class ConfigManager {
         checkIntervalMinutes: parseInt(process.env.CHECK_INTERVAL_MINUTES, 10) || 5,
         timeoutSeconds: parseInt(process.env.TIMEOUT_SECONDS, 10) || 10,
         retryAttempts: 3,
+        concurrency: parseInt(process.env.CHECK_CONCURRENCY, 10) || 8,
         customHealthCheckUrl: process.env.CUSTOM_HEALTH_CHECK_URL || ''
       },
       subscriptions: [],
+      imports: [],
       excludeNodes: [],
       manualNodes: [],
       notifications: {
@@ -87,10 +90,39 @@ class ConfigManager {
       this.config.subscriptions = [];
     }
     this.config.subscriptions.push({
-      id: Date.now().toString(),
+      id: crypto.randomUUID(),
       ...subscription,
       addedAt: new Date().toISOString()
     });
+    return this.saveConfig();
+  }
+
+  updateSubscription(id, updates) {
+    const index = (this.config.subscriptions || []).findIndex(item => item.id === id);
+    if (index < 0) return false;
+    this.config.subscriptions[index] = { ...this.config.subscriptions[index], ...updates, id };
+    return this.saveConfig();
+  }
+
+  addImport(item) {
+    if (!this.config.imports) this.config.imports = [];
+    const value = {
+      id: crypto.randomUUID(),
+      name: item.name,
+      content: item.content,
+      enabled: item.enabled !== false,
+      nodeCount: item.nodeCount || 0,
+      addedAt: new Date().toISOString()
+    };
+    this.config.imports.push(value);
+    this.saveConfig();
+    return value;
+  }
+
+  removeImport(id) {
+    const before = (this.config.imports || []).length;
+    this.config.imports = (this.config.imports || []).filter(item => item.id !== id);
+    if (this.config.imports.length === before) return false;
     return this.saveConfig();
   }
 
@@ -126,7 +158,7 @@ class ConfigManager {
       this.config.manualNodes = [];
     }
     this.config.manualNodes.push({
-      id: Date.now().toString(),
+      id: crypto.randomUUID(),
       ...node,
       addedAt: new Date().toISOString()
     });
