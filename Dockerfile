@@ -12,10 +12,16 @@ FROM node:22-alpine AS runtime
 ARG TARGETARCH
 ARG MIHOMO_VERSION=v1.19.30
 
+LABEL org.opencontainers.image.title="Node Watcher" \
+      org.opencontainers.image.source="https://github.com/leoch627/node-watcher" \
+      org.opencontainers.image.licenses="AGPL-3.0-only"
+
 WORKDIR /app
 RUN apk add --no-cache ca-certificates curl gzip tini font-noto-cjk \
-    && case "${TARGETARCH}" in amd64|arm64) ;; *) echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; esac \
-    && curl -fsSL -o /tmp/mihomo.gz "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-${TARGETARCH}-${MIHOMO_VERSION}.gz" \
+    && image_arch="${TARGETARCH}" \
+    && if [ -z "${image_arch}" ]; then case "$(apk --print-arch)" in x86_64) image_arch=amd64 ;; aarch64) image_arch=arm64 ;; esac; fi \
+    && case "${image_arch}" in amd64|arm64) ;; *) echo "Unsupported architecture: ${image_arch}" >&2; exit 1 ;; esac \
+    && curl -fsSL -o /tmp/mihomo.gz "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-${image_arch}-${MIHOMO_VERSION}.gz" \
     && gzip -d /tmp/mihomo.gz \
     && install -m 0755 /tmp/mihomo /usr/local/bin/mihomo \
     && mihomo -v

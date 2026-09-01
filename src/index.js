@@ -7,6 +7,7 @@ const logger = require('./utils/logger');
 const config = require('./utils/config');
 const schedulerService = require('./services/scheduler');
 const mihomoService = require('./services/mihomo');
+const authService = require('./services/auth');
 
 // Import routes
 const subscriptionsRouter = require('./routes/subscriptions');
@@ -16,27 +17,23 @@ const systemRouter = require('./routes/system');
 const manualNodesRouter = require('./routes/manualNodes');
 const importsRouter = require('./routes/imports');
 const reportsRouter = require('./routes/reports');
+const authRouter = require('./routes/auth');
 
 const app = express();
+app.disable('x-powered-by');
+app.set('trust proxy', process.env.TRUST_PROXY === '1' ? 1 : false);
 
 // Middleware
-app.use(cors());
+if (process.env.CORS_ORIGIN) {
+  app.use(cors({ origin: process.env.CORS_ORIGIN, credentials: true }));
+}
 app.use(bodyParser.json({ limit: '4mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '4mb' }));
 
 // Serve static files
 app.use(express.static(path.join(__dirname, '../public')));
 
-// API routes
-app.use('/api/subscriptions', subscriptionsRouter);
-app.use('/api/nodes', nodesRouter);
-app.use('/api/notifications', notificationsRouter);
-app.use('/api/system', systemRouter);
-app.use('/api/manual-nodes', manualNodesRouter);
-app.use('/api/imports', importsRouter);
-app.use('/api/reports', reportsRouter);
-
-// Health check endpoint
+// Public API routes
 app.get('/api/health', (req, res) => {
   res.json({
     success: true,
@@ -45,6 +42,17 @@ app.get('/api/health', (req, res) => {
     mihomoReady: mihomoService.ready
   });
 });
+app.use('/api/auth', authRouter);
+
+// Protected API routes
+app.use('/api', authService.requireAuth());
+app.use('/api/subscriptions', subscriptionsRouter);
+app.use('/api/nodes', nodesRouter);
+app.use('/api/notifications', notificationsRouter);
+app.use('/api/system', systemRouter);
+app.use('/api/manual-nodes', manualNodesRouter);
+app.use('/api/imports', importsRouter);
+app.use('/api/reports', reportsRouter);
 
 // Serve frontend for all other routes
 app.get('*', (req, res) => {

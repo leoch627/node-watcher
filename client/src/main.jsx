@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity, Bell, Check, ChevronDown, Download, FileImage, Gauge, Globe2, Import,
-  LoaderCircle, Mail, Play, Plus, RefreshCw, Search, Send, Server, Settings2,
-  Smartphone, Trash2, X
+  LoaderCircle, LockKeyhole, LogIn, LogOut, Mail, Play, Plus, RefreshCw, Search,
+  Send, Server, Settings2, Smartphone, Trash2, X
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -20,7 +20,14 @@ async function api(path, options = {}) {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
   });
   const data = await response.json();
-  if (!response.ok || data.success === false) throw new Error(data.error || `HTTP ${response.status}`);
+  if (!response.ok || data.success === false) {
+    const error = new Error(data.error || `HTTP ${response.status}`);
+    error.status = response.status;
+    if (response.status === 401 && !path.startsWith('/api/auth/')) {
+      window.dispatchEvent(new Event('auth-required'));
+    }
+    throw error;
+  }
   return data;
 }
 
@@ -50,6 +57,45 @@ function ServiceState({ value }) {
 
 function EmptyRow({ columns, children }) {
   return <tr><td colSpan={columns} className="h-32 text-center text-sm text-muted-foreground">{children}</td></tr>;
+}
+
+function LoginView({ onAuthenticated }) {
+  const [username, setUsername] = useState('admin');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async event => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const data = await api('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username, password })
+      });
+      onAuthenticated(data.username || username);
+    } catch (submitError) {
+      setError(submitError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <div className="flex min-h-screen items-center justify-center px-5 py-10">
+    <main className="w-full max-w-sm">
+      <div className="mb-10 flex items-center gap-3">
+        <div className="flex size-11 items-center justify-center rounded-md bg-foreground text-background"><Activity className="size-6" /></div>
+        <div><h1 className="text-xl font-semibold">Node Watcher</h1><p className="mt-0.5 text-sm text-muted-foreground">节点监控控制台</p></div>
+      </div>
+      <form onSubmit={submit} className="grid gap-5">
+        <div><div className="flex items-center gap-2"><LockKeyhole className="size-4" /><h2 className="text-base font-semibold">管理员登录</h2></div></div>
+        <label className="grid gap-2 text-sm font-medium">用户名<Input autoFocus autoComplete="username" value={username} onChange={event => setUsername(event.target.value)} required /></label>
+        <label className="grid gap-2 text-sm font-medium">密码<Input type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} required /></label>
+        {error && <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div>}
+        <Button className="w-full" disabled={busy}>{busy ? <LoaderCircle className="animate-spin" /> : <LogIn />}登录</Button>
+      </form>
+    </main>
+  </div>;
 }
 
 function NodeState({ online }) {
@@ -261,6 +307,7 @@ function SettingsView({ config, notifications, onSaved, notify }) {
 }
 
 function App() {
+  const [auth, setAuth] = useState({ loading: true, authenticated: false, authEnabled: true, username: null });
   const [nodes, setNodes] = useState([]);
   const [summary, setSummary] = useState({ total: 0, online: 0, offline: 0, pending: 0 });
   const [subscriptions, setSubscriptions] = useState([]);
@@ -284,11 +331,31 @@ function App() {
     setNodes(nodeData.stats); setSummary(nodeData.summary); setSubscriptions(subData.subscriptions);
     setImports(importData.imports); setSystem(systemData.status); setMonitoring(configData.config.monitoring); setNotifications(notificationData.notifications);
   };
-  useEffect(() => { load().catch(error => notify(error.message, true)); }, []);
   useEffect(() => {
+    let active = true;
+    fetch('/api/auth/session').then(async response => {
+      const data = await response.json();
+      if (active) setAuth({
+        loading: false,
+        authenticated: response.ok && data.authenticated,
+        authEnabled: data.authEnabled !== false,
+        username: data.username || null
+      });
+    }).catch(() => {
+      if (active) setAuth(current => ({ ...current, loading: false, authenticated: false }));
+    });
+    const handleRequired = () => setAuth(current => ({ ...current, loading: false, authenticated: false, username: null }));
+    window.addEventListener('auth-required', handleRequired);
+    return () => { active = false; window.removeEventListener('auth-required', handleRequired); };
+  }, []);
+  useEffect(() => {
+    if (auth.authenticated) load().catch(error => notify(error.message, true));
+  }, [auth.authenticated]);
+  useEffect(() => {
+    if (!auth.authenticated) return undefined;
     const timer = setInterval(() => load().catch(() => {}), system.jobs?.media?.status === 'running' ? 2500 : 12000);
     return () => clearInterval(timer);
-  }, [system.jobs?.media?.status]);
+  }, [auth.authenticated, system.jobs?.media?.status]);
 
   const sources = useMemo(() => Array.from(new Set(nodes.map(item => item.node.subscription))).sort(), [nodes]);
   const filtered = useMemo(() => nodes.filter(item => {
@@ -309,14 +376,24 @@ function App() {
   const reload = async () => { setBusy('reload'); try { await api('/api/nodes/reload', { method: 'POST', body: '{}' }); await load(); notify('来源已重新加载'); } catch (error) { notify(error.message, true); } finally { setBusy(''); } };
   const exclude = async node => { if (!confirm(`排除节点“${node.name}”？`)) return; try { await api(`/api/nodes/${node.id}`, { method: 'DELETE' }); await load(); } catch (error) { notify(error.message, true); } };
   const select = id => setSelected(current => { const next = new Set(current); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  const logout = async () => {
+    try { await api('/api/auth/logout', { method: 'POST', body: '{}' }); } catch {}
+    setAuth(current => ({ ...current, authenticated: false, username: null }));
+    setNodes([]);
+    setSelected(new Set());
+  };
+
+  if (auth.loading) return <div className="flex min-h-screen items-center justify-center"><LoaderCircle className="size-6 animate-spin text-muted-foreground" /></div>;
+  if (!auth.authenticated) return <LoginView onAuthenticated={username => setAuth(current => ({ ...current, authenticated: true, username }))} />;
 
   return <TooltipProvider><div className="min-h-screen">
     <header className="border-b bg-background"><div className="mx-auto flex h-16 max-w-[1600px] items-center justify-between gap-4 px-4 sm:px-6">
       <div className="flex min-w-0 items-center gap-3"><div className="flex size-9 items-center justify-center rounded-md border bg-foreground text-background"><Activity className="size-5" /></div><div className="min-w-0"><h1 className="truncate text-sm font-semibold">Node Watcher</h1><div className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className={`size-1.5 rounded-full ${system.mihomoReady ? 'bg-emerald-500' : 'bg-red-500'}`} />Mihomo {system.mihomoReady ? '已连接' : '未连接'}</div></div></div>
       <div className="flex items-center gap-2">
-        <Tooltip content="重新拉取来源"><Button size="icon" variant="outline" onClick={reload} disabled={Boolean(busy)}>{busy === 'reload' ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}</Button></Tooltip>
+        <Tooltip content="重新拉取来源"><Button size="icon" variant="outline" aria-label="重新拉取来源" onClick={reload} disabled={Boolean(busy)}>{busy === 'reload' ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}</Button></Tooltip>
         <Button variant="outline" onClick={healthCheck} disabled={Boolean(busy)}>{busy === 'health' ? <LoaderCircle className="animate-spin" /> : <Gauge />}<span className="hidden sm:inline">检测延迟</span></Button>
         <Button onClick={mediaCheck} disabled={Boolean(busy) || mediaJob?.status === 'running'}>{mediaJob?.status === 'running' ? <LoaderCircle className="animate-spin" /> : <Play />}<span className="hidden sm:inline">流媒体检测</span>{selected.size > 0 && <Badge className="bg-zinc-700 text-white ring-0">{selected.size}</Badge>}</Button>
+        {auth.authEnabled && <Tooltip content={`退出 ${auth.username || ''}`}><Button size="icon" variant="ghost" aria-label="退出登录" onClick={logout}><LogOut /></Button></Tooltip>}
       </div>
     </div></header>
     <main className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6">
