@@ -13,7 +13,7 @@ Node Watcher 是一个自托管的代理节点监控面板。它通过 Mihomo �
 - 节点离线与恢复时发送 Bark、邮件或 Telegram Bot 告警
 - 生成可下载的 PNG 检测矩阵
 - 管理员登录、签名会话 Cookie 和登录失败限速
-- Docker 镜像同时支持 `linux/amd64` 和 `linux/arm64`
+- Dockerfile 支持 `linux/amd64` 和 `linux/arm64` 构建（GitHub Actions 当前仅发布 `linux/amd64`）
 
 ## 树莓派部署
 
@@ -60,10 +60,9 @@ docker compose down
 
 ## 多架构镜像
 
-`Dockerfile` 会根据构建目标自动下载对应的 Mihomo 二进制；普通 Raspberry Pi 64 位系统会构建 `arm64` 版本。GitHub Actions 发布的镜像 manifest 同时包含：
+`Dockerfile` 会根据构建目标自动下载对应的 Mihomo 二进制；普通 Raspberry Pi 64 位系统会构建 `arm64` 版本。GitHub Actions 当前发布的镜像 manifest 包含：
 
 - `linux/amd64`
-- `linux/arm64`
 
 手动发布双架构镜像：
 
