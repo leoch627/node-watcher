@@ -27,7 +27,9 @@ Node Watcher 使用 Mihomo 执行代理检测，提供 Web 管理界面、状态
 ghcr.io/leoch627/node-watcher:latest
 ```
 
-镜像包含前端、后端和 Mihomo。**GitHub Actions 当前仅发布 `linux/amd64` 预编译镜像**，适用于 x86_64 服务器和 NAS。ARM64 设备（如 64 位树莓派）请使用下方「从源码构建」方式；Dockerfile 仍支持 `linux/arm64` 构建。
+镜像包含前端、后端和 Mihomo。发布流程分别构建 `linux/amd64` 与 `linux/arm64`，再合并为同一个多架构镜像标签，适用于 x86_64 服务器、NAS 和 64 位树莓派。Docker 会自动选择匹配宿主机架构的镜像，无需手动指定 `platform`。
+
+> 旧版发布流程曾只提供 AMD64 镜像。ARM64 设备首次部署前，请确认新版工作流的 `Build amd64`、`Build arm64` 和 `Publish multi-platform image` 均已成功；仅推送代码或完成单个架构构建还不代表镜像标签已更新。
 
 **1. 创建部署目录**
 
@@ -311,7 +313,9 @@ data/               运行数据（自动生成）
 .github/workflows/  镜像构建与发布流程
 ```
 
-GitHub Actions 配置为在推送 `main` 分支、`v*` 标签或手动触发时，构建并发布 `linux/amd64` 镜像到 GHCR。Dockerfile 仍支持 AMD64 和 ARM64，手动构建并发布双架构镜像可使用：
+GitHub Actions 配置为在推送 `main` 分支、`v*` 标签或手动触发时，分别在 `ubuntu-24.04`（AMD64）和 `ubuntu-24.04-arm`（ARM64）原生 runner 上构建镜像，不依赖 QEMU 模拟执行。两个构建均成功后，发布任务验证两种架构齐全，再将镜像合并到 GHCR 的同一标签；任一架构构建失败时，不更新该次发布的标签。
+
+手动构建并发布双架构镜像可使用：
 
 ```bash
 docker buildx build \
@@ -339,6 +343,16 @@ docker buildx build \
 | `GET` | `/api/reports/latest.png` | 根据当前结果生成 PNG 报告 |
 
 ## 常见问题
+
+**树莓派拉取时提示 `no matching manifest for linux/arm64/v8`？**
+
+所用镜像标签没有 ARM64 版本。先确认多架构工作流已完整发布成功，再检查镜像包含的平台：
+
+```bash
+docker buildx imagetools inspect ghcr.io/leoch627/node-watcher:latest
+```
+
+输出应同时包含 `linux/amd64` 和 `linux/arm64`。确认后在部署目录执行 `docker compose pull && docker compose up -d`。如果使用固定版本标签，请检查对应标签；旧标签不会因为 `latest` 更新而自动补齐架构。不要将树莓派的 `platform` 强制改为 `linux/amd64` 来绕过检查；无法等待镜像发布时，可使用「从源码构建」方式在树莓派本机构建。
 
 **拉取预编译镜像提示 `denied` 或 `manifest unknown`？**
 
