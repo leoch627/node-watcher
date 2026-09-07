@@ -19,7 +19,38 @@ Node Watcher 使用 Mihomo 执行代理检测，提供 Web 管理界面、状态
 
 ## 快速开始
 
-### 使用预编译镜像部署（推荐）
+### 一键部署（推荐）
+
+适用于已安装 Docker Compose v2 和 OpenSSL 的 Linux 服务器、NAS 或 64 位树莓派，使用本机 rootful Docker。以 **root** 身份运行以下命令（普通用户将第二行改为 `sudo bash deploy.sh /opt/node-watcher`）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/leoch627/node-watcher/main/deploy.sh -o deploy.sh &&
+bash deploy.sh /opt/node-watcher
+```
+
+已经克隆仓库时，也可以在仓库目录直接运行 `sudo bash deploy.sh /opt/node-watcher`，无需另行下载。
+
+脚本会自动完成：
+
+- 检查 Docker、Compose 和 AMD64 / ARM64 平台，拉取预编译镜像，不在树莓派上编译。
+- 创建 `.env`，默认用户名为 `admin`，生成 **36 位随机十六进制密码**，并分别生成独立的会话密钥和 Mihomo 控制密钥。
+- 为 `.env` 设置 `600` 权限，准备 `data/`、`logs/` 并设置容器用户的写入权限。
+- 生成专用的 `compose.deploy.yml`，保留原有 `docker-compose.yml`，启动容器并等待健康检查。
+- 成功后显示访问地址、首次生成的密码及日志查看命令。已有非空密码和设置不会被覆盖，空白或缺失项会自动补全。
+
+默认部署目录为 `/opt/node-watcher`，端口为 `3000`。密码和密钥只在目标机器上生成并写入 `.env`，不会写入仓库。首次拉取失败时也会保留生成的配置，修复问题后可直接重试。
+
+**更新或修改设置：** 编辑部署目录中的 `.env`，再重新运行脚本。设置 `PORT` 可修改对外端口，`NODE_WATCHER_IMAGE` 可固定已发布的镜像标签；已有密码和数据会保留。`compose.deploy.yml` 由脚本管理，每次运行会重新生成，请勿在其中保存自定义修改。脚本不会自动安装 Docker，也不会绕过尚未发布的 ARM64 镜像。
+
+一键部署后的手动维护命令需要明确使用专用 Compose 文件：
+
+```bash
+cd /opt/node-watcher
+docker compose --project-name node-watcher --env-file .env -f compose.deploy.yml logs -f --tail=100
+docker compose --project-name node-watcher --env-file .env -f compose.deploy.yml ps
+```
+
+### 手动部署预编译镜像
 
 无需克隆源码或本地构建，只需安装 Docker 和 Docker Compose。仓库的 GitHub Actions 会在推送 `main` 分支或 `v*` 标签后构建镜像，成功后发布到 GHCR；日常部署使用：
 
@@ -227,7 +258,7 @@ TRUST_PROXY=1
 
 ## 数据与维护
 
-预编译镜像示例与仓库自带的 Docker Compose 均挂载以下目录：
+一键部署、预编译镜像示例与仓库自带的 Docker Compose 均挂载以下目录：
 
 | 宿主机路径 | 内容 |
 | --- | --- |
@@ -240,6 +271,8 @@ TRUST_PROXY=1
 本地非 Docker 运行时，配置文件默认位于项目根目录的 `config.json`；历史和 Mihomo 数据仍位于工作目录下的 `data/`。修改 `CONFIG_FILE` 不会改变历史数据目录。
 
 备份时保留 `.env` 和 `data/`；本地运行还需保留实际使用的配置文件，日志按需归档。可先停止服务再复制文件，避免备份过程中数据变化。不要手动修改自动生成的 Mihomo 配置，后续加载节点时会覆盖它。
+
+以下简写命令适用于手动部署和源码构建。一键部署请重新运行 `deploy.sh` 更新，或在 `docker compose` 后增加 `--project-name node-watcher --env-file .env -f compose.deploy.yml`，避免误用目录中已有的其他 Compose 文件。
 
 ```bash
 # 查看最近日志并持续跟踪
@@ -303,6 +336,7 @@ npm run build     # 前端生产构建
 ### 项目结构
 
 ```text
+deploy.sh           一键部署、随机凭据生成与镜像更新
 client/             React 前端与界面组件
 src/routes/         HTTP API 路由
 src/services/       节点解析、订阅、检测、告警、鉴权与报告
@@ -352,7 +386,7 @@ docker buildx build \
 docker buildx imagetools inspect ghcr.io/leoch627/node-watcher:latest
 ```
 
-输出应同时包含 `linux/amd64` 和 `linux/arm64`。确认后在部署目录执行 `docker compose pull && docker compose up -d`。如果使用固定版本标签，请检查对应标签；旧标签不会因为 `latest` 更新而自动补齐架构。不要将树莓派的 `platform` 强制改为 `linux/amd64` 来绕过检查；无法等待镜像发布时，可使用「从源码构建」方式在树莓派本机构建。
+输出应同时包含 `linux/amd64` 和 `linux/arm64`。确认后在部署目录执行 `docker compose pull && docker compose up -d`；一键部署用户直接重新运行 `deploy.sh`。如果使用固定版本标签，请检查对应标签；旧标签不会因为 `latest` 更新而自动补齐架构。不要将树莓派的 `platform` 强制改为 `linux/amd64` 来绕过检查；无法等待镜像发布时，可使用「从源码构建」方式在树莓派本机构建。
 
 **拉取预编译镜像提示 `denied` 或 `manifest unknown`？**
 
