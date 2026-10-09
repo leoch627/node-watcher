@@ -44,15 +44,62 @@ function Metric({ label, value, detail, tone }) {
   </div>;
 }
 
-const serviceNames = { netflix: 'Netflix', disney: 'Disney+', youtube: 'YouTube', primeVideo: 'Prime', chatgpt: 'ChatGPT' };
+const serviceNames = { netflix: 'Netflix', disney: 'Disney+', youtube: 'YouTube', primeVideo: 'Prime', chatgpt: 'ChatGPT', tiktok: 'TikTok', hbo: 'HBO Max' };
+
+const unlockLabels = { native: '原生', dns: 'DNS' };
+
+function unlockTip(value) {
+  if (value.unlockType === 'native') return `原生解锁：平台看到的 IP ${value.platformIp} 与节点出口一致`;
+  if (value.unlockType === 'dns') return `DNS / 分流解锁：${value.unlockNote || ''}`;
+  return value.unlockNote || '';
+}
 
 function ServiceState({ value }) {
   if (!value) return <span className="text-muted-foreground">-</span>;
   const variants = { unlocked: 'success', limited: 'warning', blocked: 'danger', error: 'outline' };
   const labels = { unlocked: value.region || '可用', limited: '受限', blocked: '不可用', error: '错误' };
-  return <Tooltip content={value.detail || labels[value.status]}>
-    <Badge variant={variants[value.status] || 'outline'}>{labels[value.status] || value.status}</Badge>
+  const tip = [value.detail || labels[value.status], unlockTip(value), value.stale ? '（上次成功结果）' : ''].filter(Boolean).join('\n');
+  return <Tooltip content={tip}>
+    <span className="inline-flex items-center gap-1">
+      <Badge variant={variants[value.status] || 'outline'}>{labels[value.status] || value.status}</Badge>
+      {value.unlockType && <span className={`text-[10px] font-medium ${value.unlockType === 'dns' ? 'text-amber-700' : 'text-muted-foreground'}`}>{unlockLabels[value.unlockType]}</span>}
+    </span>
   </Tooltip>;
+}
+
+function regionFlag(code) {
+  const value = String(code || '').toUpperCase();
+  if (!/^[A-Z]{2}$/.test(value)) return '';
+  return String.fromCodePoint(...[...value].map(char => 0x1F1E6 + char.charCodeAt(0) - 65));
+}
+
+function RegionCell({ node, media }) {
+  const claimed = node.region;
+  const actual = media?.exit?.region;
+  if (!claimed && !actual) return <span className="text-muted-foreground">-</span>;
+  const mismatch = claimed && actual && claimed !== actual;
+  const shown = claimed || actual;
+  const tip = mismatch
+    ? `节点名标注 ${claimed}，但出口 IP 实际在 ${actual}`
+    : claimed ? `来自节点名${node.regionSource === 'flag' ? '中的国旗' : '中的地名'}` : '来自出口 IP';
+  return <Tooltip content={tip}>
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+      <span>{regionFlag(shown)}</span><span className="font-mono text-xs">{shown}</span>
+      {mismatch && <Badge variant="warning">出口 {actual}</Badge>}
+    </span>
+  </Tooltip>;
+}
+
+function RegionalServices({ regional }) {
+  const entries = Object.entries(regional?.services || {});
+  if (entries.length === 0) return <span className="text-muted-foreground">-</span>;
+  const variants = { unlocked: 'success', limited: 'warning', blocked: 'danger', error: 'outline' };
+  const labels = { unlocked: '可用', limited: '受限', blocked: '不可用', error: '错误' };
+  return <div className="flex flex-wrap gap-1.5">
+    {entries.map(([key, value]) => <Tooltip key={key} content={[value.detail || labels[value.status] || '', unlockTip(value), value.stale ? '（上次成功结果）' : ''].filter(Boolean).join('\n')}>
+      <Badge variant={variants[value.status] || 'outline'}>{value.label || key} {labels[value.status] || value.status}{value.unlockType ? ` · ${unlockLabels[value.unlockType]}` : ''}</Badge>
+    </Tooltip>)}
+  </div>;
 }
 
 function EmptyRow({ columns, children }) {
@@ -105,21 +152,23 @@ function NodeState({ online }) {
 
 function NodeTable({ nodes, selected, onSelect, onDelete }) {
   return <div className="overflow-x-auto rounded-md border">
-    <table className="w-full min-w-[1180px] border-collapse text-sm">
+    <table className="w-full min-w-[1560px] border-collapse text-sm">
       <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
         <tr>
           <th className="w-10 px-3 py-2.5"></th>
           <th className="min-w-56 px-3 py-2.5 font-medium">节点</th>
           <th className="w-40 px-3 py-2.5 font-medium">来源</th>
           <th className="w-24 px-3 py-2.5 font-medium">协议</th>
+          <th className="w-28 px-3 py-2.5 font-medium">地区</th>
           <th className="w-24 px-3 py-2.5 font-medium">状态</th>
           <th className="w-24 px-3 py-2.5 font-medium">延迟</th>
           {Object.values(serviceNames).map(name => <th key={name} className="w-28 px-3 py-2.5 text-center font-medium">{name}</th>)}
+          <th className="min-w-48 px-3 py-2.5 font-medium">区域项目</th>
           <th className="w-12 px-3 py-2.5"></th>
         </tr>
       </thead>
       <tbody>
-        {nodes.length === 0 && <EmptyRow columns={12}>没有符合条件的节点</EmptyRow>}
+        {nodes.length === 0 && <EmptyRow columns={16}>没有符合条件的节点</EmptyRow>}
         {nodes.map(status => <tr key={status.node.id} className="border-t hover:bg-muted/35">
           <td className="px-3 py-2.5"><input type="checkbox" className="size-4 accent-zinc-900" checked={selected.has(status.node.id)} onChange={() => onSelect(status.node.id)} aria-label={`选择 ${status.node.name}`} /></td>
           <td className="max-w-72 px-3 py-2.5">
@@ -128,9 +177,11 @@ function NodeTable({ nodes, selected, onSelect, onDelete }) {
           </td>
           <td className="max-w-40 truncate px-3 py-2.5 text-muted-foreground" title={status.node.subscription}>{status.node.subscription}</td>
           <td className="px-3 py-2.5"><Badge variant="outline">{String(status.node.protocol).toUpperCase()}</Badge></td>
+          <td className="px-3 py-2.5"><RegionCell node={status.node} media={status.media} /></td>
           <td className="px-3 py-2.5"><NodeState online={status.online} /></td>
           <td className="px-3 py-2.5 font-mono text-xs tabular-nums">{status.online ? `${status.responseTime} ms` : '-'}</td>
           {Object.keys(serviceNames).map(key => <td key={key} className="px-3 py-2.5 text-center"><ServiceState value={status.media?.services?.[key]} /></td>)}
+          <td className="px-3 py-2.5"><RegionalServices regional={status.media?.regional} /></td>
           <td className="px-3 py-2.5"><Tooltip content="排除节点"><Button size="icon" variant="ghost" onClick={() => onDelete(status.node)}><Trash2 /></Button></Tooltip></td>
         </tr>)}
       </tbody>
@@ -208,7 +259,7 @@ function ChannelHeader({ icon: Icon, name, detail, enabled, onEnabledChange }) {
 }
 
 function SettingsView({ config, notifications, onSaved, notify }) {
-  const defaultMonitoring = { checkIntervalMinutes: 5, timeoutSeconds: 10, concurrency: 8 };
+  const defaultMonitoring = { checkIntervalMinutes: 5, timeoutSeconds: 10, concurrency: 8, retryAttempts: 1, failureThreshold: 2, subscriptionRefreshMinutes: 30, customHealthCheckUrl: '' };
   const [monitoringForm, setMonitoringForm] = useState(config || defaultMonitoring);
   const [channels, setChannels] = useState({
     bark: { enabled: false, url: '' },
@@ -271,6 +322,10 @@ function SettingsView({ config, notifications, onSaved, notify }) {
         <label className="grid gap-2 text-sm font-medium">周期（分钟）<Input type="number" min="1" value={monitoringForm.checkIntervalMinutes ?? 5} onChange={e => setMonitoringForm({ ...monitoringForm, checkIntervalMinutes: Number(e.target.value) })} /></label>
         <label className="grid gap-2 text-sm font-medium">超时（秒）<Input type="number" min="1" value={monitoringForm.timeoutSeconds ?? 10} onChange={e => setMonitoringForm({ ...monitoringForm, timeoutSeconds: Number(e.target.value) })} /></label>
         <label className="grid gap-2 text-sm font-medium">并发数<Input type="number" min="1" max="32" value={monitoringForm.concurrency ?? 8} onChange={e => setMonitoringForm({ ...monitoringForm, concurrency: Number(e.target.value) })} /></label>
+        <label className="grid gap-2 text-sm font-medium">失败重试（次，0-3）<Input type="number" min="0" max="3" value={monitoringForm.retryAttempts ?? 1} onChange={e => setMonitoringForm({ ...monitoringForm, retryAttempts: Number(e.target.value) })} /></label>
+        <label className="grid gap-2 text-sm font-medium">连续失败多少次才告警<Input type="number" min="1" max="10" value={monitoringForm.failureThreshold ?? 2} onChange={e => setMonitoringForm({ ...monitoringForm, failureThreshold: Number(e.target.value) })} /></label>
+        <label className="grid gap-2 text-sm font-medium">订阅刷新（分钟）<Input type="number" min="1" value={monitoringForm.subscriptionRefreshMinutes ?? 30} onChange={e => setMonitoringForm({ ...monitoringForm, subscriptionRefreshMinutes: Number(e.target.value) })} /></label>
+        <label className="grid gap-2 text-sm font-medium sm:col-span-3">探测地址（留空使用默认 gstatic generate_204）<Input type="url" placeholder="https://www.gstatic.com/generate_204" value={monitoringForm.customHealthCheckUrl ?? ''} onChange={e => setMonitoringForm({ ...monitoringForm, customHealthCheckUrl: e.target.value })} /></label>
       </div>
       <Button className="mt-6" type="submit" disabled={Boolean(saving)}>{saving === 'monitoring' ? <LoaderCircle className="animate-spin" /> : <Check />}保存检测设置</Button>
     </form>

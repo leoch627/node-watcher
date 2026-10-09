@@ -46,3 +46,11 @@ test('sets an HttpOnly same-site session cookie', () => {
 test('requires a password in production', () => {
   assert.throws(() => new AuthService({ password: '', production: true }), /AUTH_PASSWORD/);
 });
+
+test('without a configured secret the session key is random, not derived from the password', () => {
+  const first = new AuthService({ password: 'same password', production: false });
+  const second = new AuthService({ password: 'same password', production: false });
+  const token = first.createToken();
+  assert.equal(first.verifyToken(token), true);
+  assert.equal(second.verifyToken(token), false);
+});

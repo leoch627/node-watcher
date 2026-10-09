@@ -240,15 +240,54 @@ docker compose ps
 
 ### 连通性与在线率
 
-- 启动时加载来源并执行一次连通性检测；之后按配置周期重新拉取来源并检测。
+- 启动时加载来源并执行一次连通性检测；之后按检测周期探测，并按**订阅刷新周期**（默认 30 分钟，可单独设置）重新拉取来源。订阅刷新失败时沿用上一次成功的节点列表，节点不会因为订阅服务器短暂故障而从面板消失。
 - 默认检测周期为 **5 分钟**，单节点超时为 **10 秒**，并发数为 **8**；并发可设置为 1–32。
-- 连通性检测通过 Mihomo 请求 `https://www.gstatic.com/generate_204`，显示的是该请求的延迟，不是 ICMP Ping 或带宽测速结果。
+- 连通性检测通过 Mihomo 请求 `https://www.gstatic.com/generate_204`（可在设置中改成自定义探测地址），显示的是该请求的延迟，不是 ICMP Ping 或带宽测速结果。
+- 一次探测失败后会立即重试 `retryAttempts` 次（0–3，默认 1）；每多一次重试，离线节点每轮最多多耗约 `超时 + 1 秒`，节点很多时建议保持 1–2。
+- Mihomo 未就绪（启动中、崩溃重启中）时，本轮检测会被**跳过**：不记录历史、不改变节点状态、不发告警。Mihomo 异常退出会自动按退避间隔重启。
 - 在线率为指定时间窗口内「成功检测次数 / 总检测次数」，不是按持续在线时长计算。没有检测记录时不显示在线率。
-- 历史记录按节点保留最近 31 天、最多 10,000 条；检测频率较高时，记录数量上限可能使实际覆盖时间短于 30 天。
+- 历史按节点、按**小时汇总**保存最近 31 天，不再受检测频率影响，`30d` 在线率覆盖完整 30 天（以小时为粒度）。升级时旧的逐次记录会自动转换，原文件保留为 `history.json.v1.bak`。
+- 节点 ID 由「来源 + 协议 + 服务器 + 端口 + 凭据」生成，**不再包含节点名**，机场改名不会重置历史和告警状态。（升级后各节点会获得新的 ID，旧历史不会沿用；如果之前在 `excludeNodes` 里按 ID 排除过节点，需要重新排除。）
 
 ### 流媒体与 AI 服务
 
-流媒体检测需手动触发，不随定时连通性检测自动执行。任务按节点串行切换 Mihomo 出口，同一节点的各平台请求并行执行，避免不同节点的出口相互干扰。
+流媒体检测需手动触发，不随定时连通性检测自动执行。默认任务按节点串行切换 Mihomo 出口，同一节点的各平台请求并行执行，避免不同节点的出口相互干扰；检测前会确认出口选择，检测后再确认一次，期间如果出口被改动（例如配置重载），该节点结果会作废而不是记到错误的节点上。离线节点会被跳过并保留它之前的结果。
+
+**通用项目**：Netflix、YouTube Premium、Disney+、Prime Video、ChatGPT、TikTok、HBO Max。某项本次检测出错时，会保留上次成功的结果并标记为“上次结果”。
+
+**原生解锁 / DNS 解锁**
+
+思路来自 [xykt/RegionRestrictionCheck](https://github.com/xykt/RegionRestrictionCheck)，但判定方式不同：原脚本用 `nslookup`/`dig` 检查**运行脚本那台机器**的 DNS，经代理检测时那台机器是监控主机，节点的 DNS 在机场服务器上解析，照搬会让每个节点都得到监控主机的结果。本项目改为比较**平台看到的客户端 IP**与**节点通用出口 IP**（检测前后各取一次 Cloudflare trace）：
+
+- 相同 → **原生**；不同 → **DNS**（DNS 解锁、SNI 代理或按域名分流到其他出口，三者从外部无法区分）。
+- 节点出口前后两次不一致（多出口 / 负载均衡）、或 IPv4 与 IPv6 不同族时，不下结论，悬停可看到原因。
+- 仅在平台可访问（可用 / 受限）时标注，和原脚本一致。
+
+| 平台 | 平台看到的 IP 来自 |
+| --- | --- |
+| Netflix | 影片页 `requestIpAddress` |
+| YouTube | 页面 `INNERTUBE_CONTEXT.client.remoteHost` |
+| Prime Video | 页面 `customerIPAddress` |
+| ChatGPT | `chatgpt.com/cdn-cgi/trace` |
+| KKTV | 接口返回的 `ip` |
+
+Disney+、TikTok、HBO Max 及其他区域项目没有回显客户端 IP 的接口，因此不标注解锁类型。以上字段均为 2026-10 实测格式，平台改版后可能失效（失效时只是不显示标注，不会误判）。
+
+**节点地区与区域项目**
+
+- 节点地区优先取节点名里的国旗 emoji（两个区域指示符即 ISO 国家码，如 🇯🇵 → JP）；没有国旗时回退到“香港 / 日本 / HK / JP”等地名和代码；“剩余流量”“到期时间”之类的信息节点不识别地区。
+- 流媒体检测会按该地区追加区域专属项目，并读取出口 IP 的实际国家与旗帜地区对比，**不一致时在面板里标出**（例如节点名是 🇯🇵，出口却在 US）。没有旗帜时以出口 IP 所在地区为准。
+
+| 地区 | 区域项目 |
+| --- | --- |
+| JP | Abema |
+| TW | 动画疯（Bahamut）、KKTV、Bilibili 港澳台 |
+| HK | Viu TV、Bilibili 港澳台 |
+| MO | Bilibili 港澳台 |
+
+其他地区目前只有通用项目。Abema、KKTV、Viu TV、Bilibili 的接口返回格式已实际验证；动画疯会被 Cloudflare 拦截数据中心 IP，此时显示“错误”而不是误报“不可用”。
+
+**并行检测（可选）**：设置 `MEDIA_CONCURRENCY`（1–8，默认 1）后，Mihomo 会为每个额外槽位生成一个独立的选择组和本地监听端口（默认从 `MIHOMO_HTTP_PORT + 10` 起），多个节点可同时检测。该模式依赖 Mihomo `listeners` 的 `proxy` 字段指向代理组，尚未在真实 Mihomo 上验证，建议先小范围试用。
 
 结果反映检测时平台页面或接口的响应，不保证实际账号登录、订阅、播放或使用体验。平台改版、风控、验证码及网络波动都可能影响判定；连通性正常也不代表某个平台一定可用。
 
@@ -260,7 +299,13 @@ docker compose ps
 | 邮件 | SMTP 主机、端口、TLS 设置、账号、密码、发件人和收件人 |
 | Telegram | Bot Token 和 Chat ID |
 
-节点首次检测只建立状态基线，不发送告警。后续从在线变为离线时发送故障通知，从离线变为在线时发送恢复通知，状态不变不会重复通知。
+节点首次检测只建立状态基线，不发送告警。告警规则：
+
+- 连续失败 `failureThreshold` 次（默认 2）才发送离线告警；单次失败只在面板上显示离线，不会通知，偶发抖动不再刷屏。
+- 只有发送过离线告警的节点，恢复后才发送恢复通知；状态不变不会重复通知。
+- 同一轮检测里有多个节点变化时，合并成一条消息（超过 3 个节点时，列表最多显示 15 个）。
+- 一轮里 80% 以上节点同时失败（且至少 5 个节点）时，更可能是监控主机网络或 Mihomo 的问题，此时只发一条“大量节点同时检测失败”，暂停逐节点告警；等失败比例回落后再发一条“已恢复”，真正离线的节点仍会正常告警。
+- 各渠道并发发送，一个渠道故障不影响其他渠道。
 
 当前节点状态和流媒体结果保存在内存中，重启后需重新检测，首次检测也会重新建立告警基线；在线率历史会从磁盘恢复。
 
@@ -268,7 +313,7 @@ docker compose ps
 
 登录与 Mihomo 启动参数由环境变量控制；订阅、导入内容、检测设置和通知渠道保存在配置文件中，可通过面板管理。
 
-> **配置文件与环境变量不是逐项合并的。** 已有配置文件时，程序直接读取文件。`CHECK_INTERVAL_MINUTES`、`TIMEOUT_SECONDS`、`CHECK_CONCURRENCY` 和通知相关环境变量只用于生成缺省配置。默认 Compose 也未传入这些变量，使用 Docker 部署时请优先在面板中修改检测和通知设置。
+> **配置文件与环境变量基本不逐项合并。** 已有配置文件时，程序直接读取文件（只有配置文件里**缺失**的 `monitoring` 项会用环境变量或默认值补齐）。`CHECK_INTERVAL_MINUTES`、`TIMEOUT_SECONDS`、`CHECK_CONCURRENCY` 和通知相关环境变量只用于生成缺省配置。默认 Compose 也未传入这些变量，使用 Docker 部署时请优先在面板中修改检测和通知设置。
 
 ### 常用环境变量
 
@@ -281,7 +326,12 @@ docker compose ps
 | `AUTH_USERNAME` | `admin` | 登录用户名 |
 | `AUTH_PASSWORD` | 无 | 登录密码；默认 Compose 必填 |
 | `AUTH_PASSWORD_FILE` | 无 | 从文件读取密码，优先于 `AUTH_PASSWORD`；容器使用时需自行挂载文件并调整 Compose 环境配置 |
-| `AUTH_SESSION_SECRET` | 回退到登录密码 | 会话签名密钥，建议独立随机生成 |
+| `AUTH_SESSION_SECRET` | 随机生成并保存到 `data/.session-secret`（生产模式） | 会话签名密钥；不再从登录密码派生，也可显式设置 |
+| `SESSION_SECRET_FILE` | `data/.session-secret` | 自动生成的会话密钥保存位置 |
+| `RETRY_ATTEMPTS` | `1` | 缺省配置的失败重试次数（0–3） |
+| `FAILURE_THRESHOLD` | `2` | 缺省配置的连续失败告警阈值 |
+| `SUBSCRIPTION_REFRESH_MINUTES` | `30` | 缺省配置的订阅刷新周期 |
+| `MEDIA_CONCURRENCY` | `1` | 流媒体并行检测槽位数（1–8，见上文，实验性） |
 | `AUTH_SESSION_TTL_HOURS` | `24` | 会话有效时间，单位为小时 |
 | `AUTH_COOKIE_SECURE` | `false` | HTTPS 部署时设为 `true` |
 | `TRUST_PROXY` | `0` | 位于单层可信反向代理后时可设为 `1` |
@@ -294,7 +344,7 @@ docker compose ps
 
 ### 登录与访问边界
 
-除 `/api/health` 和 `/api/auth/*` 外，其他 API（包括 `/api/nodes/public`）及 PNG 报告接口均要求有效登录会话。会话 Cookie 使用 `HttpOnly` 和 `SameSite=Strict`。
+除 `/api/health`、`/api/ready` 和 `/api/auth/*` 外，其他 API（包括 `/api/nodes/public`）及 PNG 报告接口均要求有效登录会话。会话 Cookie 使用 `HttpOnly` 和 `SameSite=Strict`。
 
 局域网直接使用 HTTP 时保持：
 
@@ -313,6 +363,15 @@ TRUST_PROXY=1
 不要在 HTTP 部署中启用 Secure Cookie，否则登录会话无法正常使用。不要向公网暴露 Mihomo 的代理和控制端口。订阅凭据、SMTP 密码和 Bot Token 会保存在本机文件中，请限制文件访问权限，避免提交 `.env`、数据目录或真实订阅内容。
 
 非生产模式未设置密码时会关闭鉴权；开发环境也应设置密码，尤其是允许其他设备访问时。
+
+### Mihomo 二进制校验
+
+Docker 构建时下载的 Mihomo 压缩包会用 `sha256sum -c` 校验，期望值固定在 `Dockerfile` 的 `MIHOMO_SHA256_AMD64` / `MIHOMO_SHA256_ARM64` 中，取自 GitHub release 附件的 `digest`。升级 `MIHOMO_VERSION` 时需同时更新这两个值：
+
+```bash
+curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/v1.19.30 \
+  | jq -r '.assets[] | select(.name|test("mihomo-linux-(amd64|arm64)-v[0-9.]+\\.gz$")) | "\(.name) \(.digest)"'
+```
 
 ## 数据与维护
 
@@ -422,7 +481,8 @@ docker buildx build \
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `GET` | `/api/health` | 存活检查，包含 `mihomoReady` 字段 |
+| `GET` | `/api/health` | 存活检查，包含 `mihomoReady`；Mihomo 未就绪时 `status` 为 `degraded`（HTTP 仍为 200） |
+| `GET` | `/api/ready` | 就绪检查：Mihomo 未就绪时返回 503；Docker `HEALTHCHECK` 使用此接口 |
 | `GET` | `/api/auth/session` | 查询登录状态 |
 | `POST` | `/api/auth/login` | 登录 |
 | `POST` | `/api/auth/logout` | 退出登录 |
@@ -456,7 +516,7 @@ docker buildx imagetools inspect ghcr.io/leoch627/node-watcher:latest
 
 **网页可以访问，但所有节点检测失败？**
 
-先查看日志和 `/api/health` 中的 `mihomoReady`。Web 服务可访问不代表 Mihomo 已就绪；检查二进制路径、执行权限、端口冲突及来源加载结果，再排查节点和网络。
+先查看日志和 `/api/health` 中的 `mihomoReady`（或访问 `/api/ready`）。Mihomo 异常退出会自动重启，重启期间检测会被跳过而不是记为离线。Web 服务可访问不代表 Mihomo 已就绪；检查二进制路径、执行权限、端口冲突及来源加载结果，再排查节点和网络。
 
 **修改 `.env` 中的检测周期或通知配置没有生效？**
 
@@ -464,7 +524,7 @@ docker buildx imagetools inspect ghcr.io/leoch627/node-watcher:latest
 
 **重启后流媒体结果消失？**
 
-流媒体结果不持久化，请重新触发流媒体检测。PNG 报告根据当前内存中的结果生成，不是历史报告归档。
+流媒体结果不持久化，请重新触发流媒体检测。检测出错时会保留同一进程内上次成功的结果。PNG 报告根据当前内存中的结果生成，不是历史报告归档。
 
 ## 许可证与致谢
 

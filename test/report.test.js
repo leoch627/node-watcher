@@ -17,3 +17,16 @@ test('renders a valid PNG report', async () => {
   assert.deepEqual([...png.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
   assert.ok(png.length > 1000);
 });
+
+test('report cells show the unlock type', async () => {
+  const png = await reportService.render([{
+    node: { name: 'HK', subscription: 'Airport', protocol: 'trojan', region: 'HK' },
+    online: true, responseTime: 30,
+    media: {
+      exit: { region: 'HK' },
+      services: { netflix: { status: 'unlocked', region: 'HK', unlockType: 'dns' }, youtube: { status: 'unlocked', region: 'HK', unlockType: 'native' } },
+      regional: { region: 'HK', services: { viutv: { status: 'unlocked', label: 'Viu TV', unlockType: 'dns' } } }
+    }
+  }]);
+  assert.deepEqual([...png.subarray(0, 4)], [137, 80, 78, 71]);
+});

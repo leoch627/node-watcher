@@ -1,3 +1,4 @@
+require('../test-support/isolate');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const monitorService = require('../src/services/monitor');

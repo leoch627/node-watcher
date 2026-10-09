@@ -7,6 +7,7 @@ const logger = require('./utils/logger');
 const config = require('./utils/config');
 const schedulerService = require('./services/scheduler');
 const mihomoService = require('./services/mihomo');
+const monitorService = require('./services/monitor');
 const authService = require('./services/auth');
 
 // Import routes
@@ -34,13 +35,21 @@ app.use(bodyParser.urlencoded({ extended: true, limit: '4mb' }));
 app.use(express.static(path.join(__dirname, '../public')));
 
 // Public API routes
+// Liveness: the web server is up. `status` reads "degraded" while the Mihomo core is not ready.
 app.get('/api/health', (req, res) => {
+  const mihomoReady = mihomoService.ready;
   res.json({
     success: true,
-    message: 'Node Watcher is running',
+    status: mihomoReady ? 'ok' : 'degraded',
+    message: mihomoReady ? 'Node Watcher is running' : 'Node Watcher is running, but the Mihomo core is not ready',
     version: '2.0.0',
-    mihomoReady: mihomoService.ready
+    mihomoReady
   });
+});
+// Readiness: 503 while monitoring is impossible, so container health checks reflect the real state.
+app.get('/api/ready', (req, res) => {
+  const mihomoReady = mihomoService.ready;
+  res.status(mihomoReady ? 200 : 503).json({ success: mihomoReady, mihomoReady });
 });
 app.use('/api/auth', authRouter);
 
@@ -101,19 +110,31 @@ app.listen(PORT, async () => {
   }
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  logger.info('SIGTERM received, shutting down gracefully');
-  mihomoService.stop();
-  schedulerService.stopMonitoring();
-  process.exit(0);
-});
+// Graceful shutdown: stop timers, flush pending history, wait for the Mihomo child to exit.
+let shuttingDown = false;
+async function shutdown(reason, exitCode = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info(`${reason} received, shutting down gracefully`);
+  try {
+    schedulerService.stopMonitoring();
+    monitorService.flushSync();
+    await mihomoService.shutdown();
+  } catch (error) {
+    logger.error(`Error during shutdown: ${error.message}`);
+  }
+  // Give winston's file transports a moment to flush.
+  setTimeout(() => process.exit(exitCode), 200);
+}
 
-process.on('SIGINT', () => {
-  logger.info('SIGINT received, shutting down gracefully');
-  mihomoService.stop();
-  schedulerService.stopMonitoring();
-  process.exit(0);
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('unhandledRejection', reason => {
+  logger.error(`Unhandled promise rejection: ${reason?.stack || reason}`);
+});
+process.on('uncaughtException', error => {
+  logger.error(`Uncaught exception: ${error?.stack || error}`);
+  shutdown('uncaughtException', 1);
 });
 
 module.exports = app;

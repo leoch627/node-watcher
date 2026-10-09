@@ -1,7 +1,23 @@
 const crypto = require('crypto');
 const fs = require('fs');
+const path = require('path');
 
 const COOKIE_NAME = 'node_watcher_session';
+
+// Without AUTH_SESSION_SECRET, sign sessions with a random key kept next to the application data.
+// (Previously the key was derived from the password, so a captured cookie allowed offline password guessing.)
+function loadOrCreateSessionSecret(file) {
+  try {
+    const existing = fs.readFileSync(file, 'utf8').trim();
+    if (existing.length >= 32) return existing;
+  } catch (_) { /* create below */ }
+  const secret = crypto.randomBytes(32).toString('hex');
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${secret}\n`, { mode: 0o600 });
+  } catch (_) { /* keep it in memory: sessions then end on restart */ }
+  return secret;
+}
 
 function readSecret(path) {
   if (!path) return '';
@@ -39,7 +55,10 @@ class AuthService {
     }
     this.ttlSeconds = Math.max(300, Number(options.ttlSeconds ?? process.env.AUTH_SESSION_TTL_HOURS * 3600) || 86400);
     this.cookieSecure = options.cookieSecure ?? process.env.AUTH_COOKIE_SECURE === 'true';
-    const sessionSecret = options.sessionSecret || process.env.AUTH_SESSION_SECRET || this.password || crypto.randomBytes(32).toString('hex');
+    const persistSecret = options.persistSessionSecret ?? this.production;
+    const secretFile = process.env.SESSION_SECRET_FILE || path.join(process.cwd(), 'data', '.session-secret');
+    const sessionSecret = options.sessionSecret || process.env.AUTH_SESSION_SECRET
+      || (persistSecret ? loadOrCreateSessionSecret(secretFile) : crypto.randomBytes(32).toString('hex'));
     this.sessionKey = crypto.scryptSync(sessionSecret || 'development-only', 'node-watcher-session', 32);
     this.passwordHash = this.enabled ? this.hashPassword(this.password) : null;
     this.attempts = new Map();
@@ -72,6 +91,9 @@ class AuthService {
     if (usernameMatches && passwordMatches) {
       this.attempts.delete(ip);
       return { ok: true };
+    }
+    if (this.attempts.size > 1000) {
+      for (const [key, value] of this.attempts) if (now - value.startedAt >= this.attemptWindowMs) this.attempts.delete(key);
     }
     const current = this.attempts.get(ip);
     this.attempts.set(ip, current && now - current.startedAt < this.attemptWindowMs

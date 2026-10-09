@@ -2,24 +2,72 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const logger = require('./logger');
+const { writeFileAtomic } = require('./atomicWrite');
 
 const CONFIG_FILE = process.env.CONFIG_FILE || path.join(__dirname, '../../config.json');
 
 class ConfigManager {
-  constructor() {
+  constructor(file = CONFIG_FILE) {
+    this.file = file;
     this.config = this.loadConfig();
   }
 
+  readConfigFile(file) {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('configuration root must be a JSON object');
+    }
+    return parsed;
+  }
+
+  // Fill keys that newer versions added (monitoring.*) and make sure every notification channel exists.
+  withDefaults(loaded) {
+    const defaults = this.getDefaultConfig();
+    const merged = { ...defaults, ...loaded };
+    merged.server = { ...defaults.server, ...(loaded.server || {}) };
+    merged.monitoring = { ...defaults.monitoring, ...(loaded.monitoring || {}) };
+    const notifications = { ...(loaded.notifications || {}) };
+    for (const key of Object.keys(defaults.notifications)) {
+      if (!notifications[key] || typeof notifications[key] !== 'object') notifications[key] = defaults.notifications[key];
+    }
+    if (!notifications.email.auth || typeof notifications.email.auth !== 'object') {
+      notifications.email = { ...notifications.email, auth: { user: '', pass: '' } };
+    }
+    merged.notifications = notifications;
+    return merged;
+  }
+
   loadConfig() {
+    if (!fs.existsSync(this.file)) return this.getDefaultConfig();
     try {
-      if (fs.existsSync(CONFIG_FILE)) {
-        const data = fs.readFileSync(CONFIG_FILE, 'utf8');
-        return JSON.parse(data);
-      }
-      return this.getDefaultConfig();
+      return this.withDefaults(this.readConfigFile(this.file));
     } catch (error) {
-      logger.error('Error loading config:', error);
-      return this.getDefaultConfig();
+      logger.error(`Error loading config: ${error.message}`);
+    }
+    // The primary file is unreadable: prefer the last known-good backup, and never let a later save
+    // silently overwrite the damaged original.
+    const backup = `${this.file}.bak`;
+    try {
+      if (fs.existsSync(backup)) {
+        const recovered = this.withDefaults(this.readConfigFile(backup));
+        logger.warn(`Recovered configuration from ${path.basename(backup)}`);
+        this.quarantine();
+        return recovered;
+      }
+    } catch (error) {
+      logger.error(`Backup configuration is unreadable too: ${error.message}`);
+    }
+    this.quarantine();
+    return this.getDefaultConfig();
+  }
+
+  quarantine() {
+    const target = `${this.file}.corrupt-${Date.now()}`;
+    try {
+      fs.renameSync(this.file, target);
+      logger.warn(`Moved unreadable configuration to ${path.basename(target)}`);
+    } catch (error) {
+      logger.error(`Could not move unreadable configuration aside: ${error.message}`);
     }
   }
 
@@ -31,7 +79,13 @@ class ConfigManager {
       monitoring: {
         checkIntervalMinutes: parseInt(process.env.CHECK_INTERVAL_MINUTES, 10) || 5,
         timeoutSeconds: parseInt(process.env.TIMEOUT_SECONDS, 10) || 10,
-        retryAttempts: 3,
+        // Extra immediate probes after a failed probe (0-3).
+        retryAttempts: process.env.RETRY_ATTEMPTS !== undefined && process.env.RETRY_ATTEMPTS !== ''
+          ? Math.max(0, parseInt(process.env.RETRY_ATTEMPTS, 10) || 0) : 1,
+        // Consecutive failed checks before a node is reported offline.
+        failureThreshold: parseInt(process.env.FAILURE_THRESHOLD, 10) || 2,
+        // How often subscriptions are re-downloaded (independent of the probe interval).
+        subscriptionRefreshMinutes: parseInt(process.env.SUBSCRIPTION_REFRESH_MINUTES, 10) || 30,
         concurrency: parseInt(process.env.CHECK_CONCURRENCY, 10) || 8,
         customHealthCheckUrl: process.env.CUSTOM_HEALTH_CHECK_URL || ''
       },
@@ -67,11 +121,20 @@ class ConfigManager {
 
   saveConfig() {
     try {
-      fs.writeFileSync(CONFIG_FILE, JSON.stringify(this.config, null, 2));
+      // Keep the previous good file as a backup (only if it still parses).
+      if (fs.existsSync(this.file)) {
+        try {
+          this.readConfigFile(this.file);
+          fs.copyFileSync(this.file, `${this.file}.bak`);
+        } catch (error) {
+          logger.warn(`Skipped configuration backup: ${error.message}`);
+        }
+      }
+      writeFileAtomic(this.file, JSON.stringify(this.config, null, 2));
       logger.info('Configuration saved successfully');
       return true;
     } catch (error) {
-      logger.error('Error saving config:', error);
+      logger.error(`Error saving config: ${error.message}`);
       return false;
     }
   }
@@ -194,3 +257,4 @@ class ConfigManager {
 }
 
 module.exports = new ConfigManager();
+module.exports.ConfigManager = ConfigManager;

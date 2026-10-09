@@ -2,8 +2,10 @@ const sharp = require('sharp');
 
 const SERVICES = [
   ['netflix', 'Netflix'], ['disney', 'Disney+'], ['youtube', 'YouTube'],
-  ['primeVideo', 'Prime Video'], ['chatgpt', 'ChatGPT']
+  ['primeVideo', 'Prime Video'], ['chatgpt', 'ChatGPT'], ['tiktok', 'TikTok'], ['hbo', 'HBO Max']
 ];
+
+const STATE_LABEL = { unlocked: '可用', limited: '受限', blocked: '不可用', error: '错误' };
 
 const STATUS_STYLE = {
   unlocked: ['#dcfce7', '#166534'], limited: ['#fef3c7', '#92400e'],
@@ -22,6 +24,14 @@ function shorten(value, length) {
   return text.length > length ? `${text.slice(0, length - 1)}...` : text;
 }
 
+function regionLabel(status) {
+  const claimed = status.node?.region;
+  const actual = status.media?.exit?.region;
+  if (!claimed && !actual) return '-';
+  if (claimed && actual && claimed !== actual) return `${claimed}≠${actual}`;
+  return claimed || actual;
+}
+
 function cell(x, y, width, text, fill = '#ffffff', color = '#334155', align = 'left') {
   const textX = align === 'center' ? x + width / 2 : x + 12;
   return `<rect x="${x}" y="${y}" width="${width}" height="44" fill="${fill}" stroke="#e2e8f0"/>
@@ -30,10 +40,10 @@ function cell(x, y, width, text, fill = '#ffffff', color = '#334155', align = 'l
 
 class ReportService {
   async render(statuses) {
-    const widths = [250, 160, 100, 90, 130, 130, 130, 130, 130];
+    const widths = [250, 160, 100, 90, 90, ...SERVICES.map(() => 120), 300];
     const width = widths.reduce((sum, value) => sum + value, 0) + 48;
     const height = 126 + Math.max(1, statuses.length) * 44 + 58;
-    const headers = ['节点', '来源', '协议', '延迟', ...SERVICES.map(([, label]) => label)];
+    const headers = ['节点', '来源', '协议', '延迟', '地区', ...SERVICES.map(([, label]) => label), '区域项目'];
     let rows = '';
     let x = 24;
     headers.forEach((header, index) => {
@@ -48,7 +58,8 @@ class ReportService {
       const values = [
         shorten(status.node?.name, 28), shorten(status.node?.subscription, 18),
         String(status.node?.protocol || '-').toUpperCase(),
-        status.online ? `${status.responseTime} ms` : status.online === false ? '离线' : '-'
+        status.online ? `${status.responseTime} ms` : status.online === false ? '离线' : '-',
+        regionLabel(status)
       ];
       values.forEach((value, index) => {
         const color = index === 3 && status.online === false ? '#b91c1c' : '#334155';
@@ -59,11 +70,15 @@ class ReportService {
         const service = status.media?.services?.[key];
         const state = service?.status || 'pending';
         const [fill, color] = STATUS_STYLE[state] || STATUS_STYLE.pending;
-        const label = state === 'unlocked' ? (service.region || '可用')
-          : state === 'limited' ? '受限' : state === 'blocked' ? '不可用' : state === 'error' ? '错误' : '-';
-        rows += cell(x, y, widths[4 + serviceIndex], label, fill, color, 'center');
-        x += widths[4 + serviceIndex];
+        const unlock = service?.unlockType === 'dns' ? ' DNS' : service?.unlockType === 'native' ? ' 原生' : '';
+        const label = state === 'unlocked' ? `${service.region || '可用'}${unlock}`
+          : state === 'limited' ? `受限${unlock}` : state === 'blocked' ? '不可用' : state === 'error' ? '错误' : '-';
+        rows += cell(x, y, widths[5 + serviceIndex], label, fill, color, 'center');
+        x += widths[5 + serviceIndex];
       });
+      const regional = Object.values(status.media?.regional?.services || {})
+        .map(item => `${item.label} ${STATE_LABEL[item.status] || '-'}${item.unlockType === 'dns' ? '(DNS)' : ''}`).join(' · ');
+      rows += cell(x, y, widths[widths.length - 1], shorten(regional || '-', 36), baseFill, '#334155', 'left');
     });
     const checkedAt = new Date().toLocaleString('zh-CN', { hour12: false });
     const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">

@@ -8,17 +8,35 @@ const nodeParser = require('./nodeParser');
 const config = require('../utils/config');
 const logger = require('../utils/logger');
 
+const MAX_INDIVIDUAL_ALERTS = 3;
+const INCIDENT_MIN_NODES = 5;
+const INCIDENT_FAIL_RATIO = 0.8;
+const INCIDENT_CLEAR_RATIO = 0.5;
+
+const clamp = (value, min, max, fallback) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : fallback;
+};
+
 class SchedulerService {
   constructor() {
     this.timer = null;
+    this.refreshTimer = null;
     this.nodes = [];
     this.sourceStatus = [];
     this.healthJob = null;
     this.mediaJob = null;
+    this.lastGoodNodes = new Map();
+    this.loadChain = Promise.resolve();
+    this.incidentNotified = false;
   }
 
   async init() {
-    await this.loadNodes();
+    try {
+      await this.loadNodes();
+    } catch (error) {
+      logger.error(`Initial node load failed: ${error.message}`);
+    }
     this.startMonitoring();
     await this.runHealthCheck();
   }
@@ -28,17 +46,23 @@ class SchedulerService {
     try {
       const parsed = await subscriptionService.getNodes(subscription.url);
       const source = { id: subscription.id, name: subscription.name, type: 'subscription' };
-      const nodes = parsed.proxies.map(proxy => nodeParser.toRuntimeNode(proxy, source)).filter(Boolean);
+      const nodes = nodeParser.toRuntimeNodes(parsed.proxies, source);
+      this.lastGoodNodes.set(subscription.id, nodes);
       return {
         nodes,
         status: { id: subscription.id, name: subscription.name, type: 'subscription', ok: true,
           nodeCount: nodes.length, durationMs: Date.now() - startedAt, errors: parsed.errors.length }
       };
     } catch (error) {
+      // A subscription server hiccup must not make the subscription's nodes vanish from monitoring
+      // (which would also throw away their alert state): keep serving the last good list.
+      const stale = this.lastGoodNodes.get(subscription.id) || [];
+      logger.warn(`Subscription "${subscription.name}" refresh failed: ${error.message}; `
+        + (stale.length ? `keeping ${stale.length} nodes from the last successful fetch` : 'no previous nodes to keep'));
       return {
-        nodes: [],
+        nodes: stale,
         status: { id: subscription.id, name: subscription.name, type: 'subscription', ok: false,
-          nodeCount: 0, durationMs: Date.now() - startedAt, error: error.message }
+          stale: stale.length > 0, nodeCount: stale.length, durationMs: Date.now() - startedAt, error: error.message }
       };
     }
   }
@@ -46,7 +70,7 @@ class SchedulerService {
   loadImport(item) {
     const parsed = subscriptionService.parseContent(item.content);
     const source = { id: item.id, name: item.name, type: 'import' };
-    const nodes = parsed.proxies.map(proxy => nodeParser.toRuntimeNode(proxy, source)).filter(Boolean);
+    const nodes = nodeParser.toRuntimeNodes(parsed.proxies, source);
     return {
       nodes,
       status: { id: item.id, name: item.name, type: 'import', ok: nodes.length > 0,
@@ -66,9 +90,18 @@ class SchedulerService {
     return nodeParser.toRuntimeNode(proxy, { id: node.id, name: '手动节点', type: 'manual' });
   }
 
-  async loadNodes() {
+  // Loads are serialised so a scheduled refresh and a user-triggered reload never run concurrently.
+  loadNodes() {
+    const run = this.loadChain.then(() => this.performLoad());
+    this.loadChain = run.catch(() => {});
+    return run;
+  }
+
+  async performLoad() {
     const cfg = config.getConfig();
     const subscriptions = (cfg.subscriptions || []).filter(item => item.enabled !== false);
+    const activeIds = new Set(subscriptions.map(item => item.id));
+    for (const id of this.lastGoodNodes.keys()) if (!activeIds.has(id)) this.lastGoodNodes.delete(id);
     const subscriptionResults = await Promise.all(subscriptions.map(item => this.loadSubscription(item)));
     const importResults = (cfg.imports || []).filter(item => item.enabled !== false).map(item => this.loadImport(item));
     const manualNodes = (cfg.manualNodes || []).filter(item => item.enabled !== false)
@@ -91,30 +124,48 @@ class SchedulerService {
 
   startMonitoring() {
     this.stopMonitoring();
-    const minutes = Math.max(1, Number(config.getConfig().monitoring?.checkIntervalMinutes || 5));
-    this.timer = setInterval(() => this.runHealthCheck({ reload: true }), minutes * 60000);
+    const monitoring = config.getConfig().monitoring || {};
+    const minutes = Math.max(1, Number(monitoring.checkIntervalMinutes || 5));
+    const refreshMinutes = Math.max(1, Number(monitoring.subscriptionRefreshMinutes || 30));
+    this.timer = setInterval(() => {
+      this.runHealthCheck().catch(error => logger.error(`Scheduled health check failed: ${error.message}`));
+    }, minutes * 60000);
+    this.refreshTimer = setInterval(() => {
+      this.loadNodes().catch(error => logger.error(`Scheduled subscription refresh failed: ${error.message}`));
+    }, refreshMinutes * 60000);
     this.timer.unref?.();
-    logger.info(`Health checks scheduled every ${minutes} minute(s)`);
+    this.refreshTimer.unref?.();
+    logger.info(`Health checks every ${minutes} minute(s); subscriptions refreshed every ${refreshMinutes} minute(s)`);
   }
 
   async runHealthCheck({ reload = false } = {}) {
     if (this.healthJob?.status === 'running') return this.healthJob;
-    if (reload) await this.loadNodes();
     const job = {
       id: crypto.randomUUID(), type: 'health', status: 'running', total: this.nodes.length,
       completed: 0, startedAt: new Date().toISOString(), finishedAt: null, error: null
     };
     this.healthJob = job;
     try {
-      const timeout = Math.max(1000, Number(config.getConfig().monitoring?.timeoutSeconds || 10) * 1000);
-      const concurrency = Math.max(1, Math.min(32, Number(config.getConfig().monitoring?.concurrency || 8)));
-      const results = await monitorService.checkAll(this.nodes, timeout, concurrency,
-        completed => { job.completed = completed; });
-      for (const result of results) {
-        if (result?.statusChanged) {
-          await notificationService.sendNotification(result.node, result);
-        }
+      if (reload) await this.loadNodes();
+      job.total = this.nodes.length;
+      if (!mihomoService.ready) {
+        // Probing without a core says nothing about the nodes: record nothing and alert on nothing.
+        job.status = 'skipped';
+        job.error = 'Mihomo is not ready';
+        logger.warn('Health check skipped: Mihomo is not ready');
+        return job;
       }
+      const monitoring = config.getConfig().monitoring || {};
+      const options = {
+        retries: clamp(monitoring.retryAttempts, 0, 3, 0),
+        failureThreshold: clamp(monitoring.failureThreshold, 1, 10, 2),
+        url: monitoring.customHealthCheckUrl || undefined
+      };
+      const timeout = Math.max(1000, Number(monitoring.timeoutSeconds || 10) * 1000);
+      const concurrency = clamp(monitoring.concurrency, 1, 32, 8);
+      const results = await monitorService.checkAll(this.nodes, timeout, concurrency,
+        completed => { job.completed = completed; }, options);
+      await this.dispatchAlerts(results.filter(Boolean), this.nodes.length);
       job.status = 'completed';
     } catch (error) {
       job.status = 'failed';
@@ -126,6 +177,38 @@ class SchedulerService {
     return job;
   }
 
+  // Turns this cycle's alert events into notifications:
+  //  - if (nearly) every node failed at once, send a single "monitor-side incident" message instead;
+  //  - several events in one cycle are merged into one message;
+  //  - alert state is only committed after a notification was dispatched, so suppressed alerts are not lost.
+  async dispatchAlerts(results, totalNodes) {
+    const failing = results.filter(item => item.online === false).length;
+    const failRatio = results.length ? failing / results.length : 0;
+    if (totalNodes >= INCIDENT_MIN_NODES && failRatio >= INCIDENT_FAIL_RATIO) {
+      if (!this.incidentNotified) {
+        this.incidentNotified = true;
+        logger.warn(`${failing}/${totalNodes} nodes failed in one cycle; suppressing per-node alerts`);
+        await notificationService.sendIncidentNotification({ failing, total: totalNodes }, false);
+      }
+      return;
+    }
+    if (this.incidentNotified && failRatio <= INCIDENT_CLEAR_RATIO) {
+      this.incidentNotified = false;
+      await notificationService.sendIncidentNotification({ failing, total: totalNodes }, true);
+    }
+    for (const kind of ['offline', 'recovered']) {
+      const entries = results.filter(item => item.alertEvent === kind).map(status => ({ node: status.node, status }));
+      if (entries.length === 0) continue;
+      if (entries.length > MAX_INDIVIDUAL_ALERTS) {
+        await notificationService.sendBatchNotification(kind, entries);
+      } else {
+        await Promise.all(entries.map(({ node, status }) =>
+          notificationService.sendNotification(node, { ...status, statusChanged: true })));
+      }
+      for (const { node } of entries) monitorService.markAlertSent(node.id, kind);
+    }
+  }
+
   startMediaCheck(nodeIds = []) {
     if (this.mediaJob?.status === 'running') return this.mediaJob;
     const selected = nodeIds.length > 0
@@ -133,30 +216,50 @@ class SchedulerService {
       : this.nodes;
     const job = {
       id: crypto.randomUUID(), type: 'media', status: 'running', total: selected.length,
-      completed: 0, errors: 0, currentNode: null, startedAt: new Date().toISOString(), finishedAt: null, error: null
+      completed: 0, errors: 0, skipped: 0, currentNode: null,
+      startedAt: new Date().toISOString(), finishedAt: null, error: null
     };
     this.mediaJob = job;
-    this.executeMediaJob(job, selected);
+    if (!mihomoService.ready) {
+      job.status = 'failed';
+      job.error = 'Mihomo is not ready';
+      job.finishedAt = new Date().toISOString();
+      return job;
+    }
+    this.executeMediaJob(job, selected).catch(error => logger.error(`Media check crashed: ${error.message}`));
     return job;
   }
 
   async executeMediaJob(job, nodes) {
-    try {
-      for (const node of nodes) {
+    const slots = Math.max(1, Math.min(mihomoService.mediaSlots, nodes.length));
+    let cursor = 0;
+    const worker = async slot => {
+      while (cursor < nodes.length) {
+        const node = nodes[cursor];
+        cursor += 1;
+        // An offline node cannot produce meaningful results; keep whatever we had before.
+        if (monitorService.getNodeStatus(node)?.online === false) {
+          job.skipped += 1;
+          job.completed += 1;
+          continue;
+        }
         job.currentNode = node.name;
         try {
-          const media = await mediaService.checkNode(node);
+          const media = await mediaService.checkNode(node, slot);
           monitorService.setMediaResult(node.id, media);
         } catch (error) {
           job.errors += 1;
           const failed = { status: 'error', detail: error.message, region: null };
           monitorService.setMediaResult(node.id, {
             checkedAt: new Date().toISOString(), exit: { ip: null, region: null },
-            services: { netflix: failed, youtube: failed, disney: failed, primeVideo: failed, chatgpt: failed }
+            services: Object.fromEntries(mediaService.SERVICE_KEYS.map(key => [key, failed]))
           });
         }
         job.completed += 1;
       }
+    };
+    try {
+      await Promise.all(Array.from({ length: slots }, (_, slot) => worker(slot)));
       job.status = 'completed';
     } catch (error) {
       job.status = 'failed';
@@ -170,7 +273,9 @@ class SchedulerService {
 
   stopMonitoring() {
     if (this.timer) clearInterval(this.timer);
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
     this.timer = null;
+    this.refreshTimer = null;
   }
 
   async reloadSubscriptions() { return this.loadNodes(); }
@@ -183,9 +288,11 @@ class SchedulerService {
       pendingNodes: monitorService.getPendingNodes().length,
       sourceStatus: this.sourceStatus,
       jobs: { health: this.healthJob, media: this.mediaJob },
-      mihomoReady: mihomoService.ready
+      mihomoReady: mihomoService.ready,
+      mihomo: mihomoService.getStatus()
     };
   }
 }
 
 module.exports = new SchedulerService();
+module.exports.SchedulerService = SchedulerService;
