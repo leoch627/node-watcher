@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  Activity, Bell, Check, ChevronDown, Download, FileImage, Gauge, Globe2, Import,
-  LoaderCircle, LockKeyhole, LogIn, LogOut, Mail, Play, Plus, RefreshCw, Search,
+  Activity, Bell, Check, ChevronDown, Copy, Download, FileImage, Gauge, Globe2, Import, KeyRound,
+  LoaderCircle, LockKeyhole, LogIn, LogOut, Mail, Play, Plus, Radar, RefreshCw, Search,
   Send, Server, Settings2, Smartphone, Trash2, X
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -102,6 +102,82 @@ function RegionalServices({ regional }) {
   </div>;
 }
 
+function readStored(key, fallback) {
+  try { return window.localStorage.getItem(key) ?? fallback; } catch { return fallback; }
+}
+
+function writeStored(key, value) {
+  try { window.localStorage.setItem(key, value); } catch { /* storage unavailable */ }
+}
+
+function ProbeDots({ probes }) {
+  if (!probes?.length) return <span className="text-muted-foreground">-</span>;
+  return <div className="flex items-center gap-1.5">
+    {probes.map(probe => {
+      const tone = probe.online === true ? 'bg-emerald-500' : probe.online === false ? 'bg-red-500' : 'bg-zinc-300';
+      const state = probe.online === true ? `在线 ${probe.responseTime ?? '-'} ms` : probe.online === false ? '离线' : '无数据';
+      return <Tooltip key={probe.id} content={`${probe.name}：${state}${probe.lastCheck ? `\n${formatTime(probe.lastCheck)}` : ''}`}>
+        <span className={`inline-block size-2.5 rounded-full ${tone}`} aria-label={`${probe.name} ${state}`} />
+      </Tooltip>;
+    })}
+  </div>;
+}
+
+function CopyField({ label, value, notify }) {
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(value); notify('已复制'); } catch { notify('复制失败，请手动选择文本', true); }
+  };
+  return <div className="grid gap-1.5">
+    <div className="flex items-center justify-between text-xs font-medium text-muted-foreground"><span>{label}</span><Button size="sm" variant="ghost" type="button" onClick={copy}><Copy />复制</Button></div>
+    <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md border bg-muted/40 p-3 font-mono text-xs">{value}</pre>
+  </div>;
+}
+
+function JoinDetails({ info, notify }) {
+  return <div className="grid gap-4">
+    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">加入串包含探针密钥，只显示这一次。每台探针机器使用自己的加入串；丢失后可重置密钥生成新的。</div>
+    <CopyField label="Docker 一键运行" value={info.docker} notify={notify} />
+    <CopyField label="加入串（docker-compose.probe.yml 的 NODE_WATCHER_JOIN）" value={info.join} notify={notify} />
+    <CopyField label="源码运行" value={info.node} notify={notify} />
+  </div>;
+}
+
+function ProbesSection({ notify, onChanged }) {
+  const [data, setData] = useState({ probes: [], listener: null });
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState('');
+  const [join, setJoin] = useState(null);
+  const load = async () => { try { setData(await api('/api/probes')); } catch (error) { notify(error.message, true); } };
+  useEffect(() => { load(); const timer = setInterval(load, 10000); return () => clearInterval(timer); }, []);
+  const act = async (key, run) => { setBusy(key); try { await run(); await load(); await onChanged(); } catch (error) { notify(error.message, true); } finally { setBusy(''); } };
+  const create = event => { event.preventDefault(); act('create', async () => { const result = await api('/api/probes', { method: 'POST', body: JSON.stringify({ name }) }); setName(''); setJoin(result); }); };
+  const rotate = probe => { if (!confirm(`重置“${probe.name}”的密钥？旧加入串会立即失效，探针需要用新加入串重新部署。`)) return; act(probe.id, async () => setJoin(await api(`/api/probes/${probe.id}/rotate`, { method: 'POST', body: '{}' }))); };
+  const remove = probe => { if (!confirm(`删除探针“${probe.name}”？它的检测历史也会删除。`)) return; act(probe.id, () => api(`/api/probes/${probe.id}`, { method: 'DELETE' })); };
+  const toggle = probe => act(probe.id, () => api(`/api/probes/${probe.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: !probe.enabled }) }));
+  const listener = data.listener;
+  return <section className="border-b pb-8 pt-8">
+    <div className="mb-2 flex items-center gap-2"><Radar className="size-4" /><h2 className="text-base font-semibold">探针</h2></div>
+    <p className="mb-5 text-sm text-muted-foreground">在不同网络里部署探针，用同一份订阅从多个地点检测。探针通过 TLS 主动连接主控{listener?.enabled ? `的 ${listener.publicPort} 端口` : ''}，自身不开放端口。</p>
+    {listener && !listener.enabled && <div className="mb-4 rounded-md border bg-muted/40 px-3 py-2 text-sm">探针监听未启用（PROBE_PORT=0 或证书生成失败，详见日志）。</div>}
+    {listener?.fingerprint && <div className="mb-4 text-xs text-muted-foreground">主控证书指纹（SHA-256）：<span className="break-all font-mono">{listener.fingerprint}</span></div>}
+    <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[640px] text-sm">
+      <thead className="bg-muted/60 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-2.5 font-medium">名称</th><th className="px-4 py-2.5 font-medium">状态</th><th className="px-4 py-2.5 font-medium">节点</th><th className="px-4 py-2.5 font-medium">来源地址</th><th className="px-4 py-2.5 font-medium">启用</th><th className="w-24 px-3 py-2.5"></th></tr></thead>
+      <tbody>{data.probes.length === 0 && <EmptyRow columns={6}>尚未添加探针</EmptyRow>}{data.probes.map(probe => <tr key={probe.id} className="border-t">
+        <td className="px-4 py-3"><div className="font-medium">{probe.name}</div><div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{probe.type === 'local' ? '主控本机' : probe.id}</div></td>
+        <td className="px-4 py-3">{probe.type === 'local' ? <Badge variant="outline">本机</Badge> : probe.connected ? <Badge variant={probe.session?.mihomoReady ? 'success' : 'warning'}>{probe.session?.mihomoReady ? '在线' : 'Mihomo 未就绪'}</Badge> : <Badge variant="danger">离线</Badge>}{!probe.connected && probe.lastSeen && <div className="mt-1 text-[11px] text-muted-foreground">最后在线 {formatTime(probe.lastSeen)}</div>}</td>
+        <td className="px-4 py-3 text-xs tabular-nums"><span className="text-emerald-700">{probe.summary.online}</span> / <span className="text-red-700">{probe.summary.offline}</span> / <span className="text-muted-foreground">{probe.summary.pending}</span></td>
+        <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{probe.session ? `${probe.session.address}${probe.session.hostname ? ` (${probe.session.hostname})` : ''}` : '-'}</td>
+        <td className="px-4 py-3">{probe.type === 'remote' ? <Switch checked={probe.enabled} onCheckedChange={() => toggle(probe)} disabled={busy === probe.id} aria-label="启用探针" /> : <span className="text-muted-foreground">-</span>}</td>
+        <td className="px-3 py-3">{probe.type === 'remote' && <div className="flex justify-end gap-1"><Tooltip content="重置密钥"><Button size="icon" variant="ghost" onClick={() => rotate(probe)} disabled={Boolean(busy)}><KeyRound /></Button></Tooltip><Tooltip content="删除"><Button size="icon" variant="ghost" onClick={() => remove(probe)} disabled={Boolean(busy)}><Trash2 /></Button></Tooltip></div>}</td>
+      </tr>)}</tbody>
+    </table></div>
+    <form onSubmit={create} className="mt-4 flex flex-wrap items-end gap-3"><label className="grid min-w-56 flex-1 gap-2 text-sm font-medium">新探针名称<Input value={name} onChange={e => setName(e.target.value)} placeholder="例如：上海电信" maxLength={40} required /></label><Button disabled={Boolean(busy) || !listener?.enabled}>{busy === 'create' ? <LoaderCircle className="animate-spin" /> : <Plus />}添加探针</Button></form>
+    <Dialog open={Boolean(join)} onOpenChange={open => { if (!open) setJoin(null); }}>
+      <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>部署探针：{join?.probe?.name}</DialogTitle><DialogDescription>在目标网络里的机器上运行下面任一命令，探针连上后会自动加入检测。</DialogDescription></DialogHeader>{join && <JoinDetails info={join} notify={notify} />}<DialogFooter><Button onClick={() => setJoin(null)}>完成</Button></DialogFooter></DialogContent>
+    </Dialog>
+  </section>;
+}
+
 function EmptyRow({ columns, children }) {
   return <tr><td colSpan={columns} className="h-32 text-center text-sm text-muted-foreground">{children}</td></tr>;
 }
@@ -151,6 +227,7 @@ function NodeState({ online }) {
 }
 
 function NodeTable({ nodes, selected, onSelect, onDelete }) {
+  const multiProbe = nodes.some(item => item.probes?.length > 1);
   return <div className="overflow-x-auto rounded-md border">
     <table className="w-full min-w-[1560px] border-collapse text-sm">
       <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
@@ -162,13 +239,14 @@ function NodeTable({ nodes, selected, onSelect, onDelete }) {
           <th className="w-28 px-3 py-2.5 font-medium">地区</th>
           <th className="w-24 px-3 py-2.5 font-medium">状态</th>
           <th className="w-24 px-3 py-2.5 font-medium">延迟</th>
+          {multiProbe && <th className="w-28 px-3 py-2.5 font-medium"><Tooltip content={`圆点依次为：${(nodes.find(item => item.probes?.length)?.probes || []).map(probe => probe.name).join('、')}`}><span className="cursor-help underline decoration-dotted underline-offset-4">各探针</span></Tooltip></th>}
           {Object.values(serviceNames).map(name => <th key={name} className="w-28 px-3 py-2.5 text-center font-medium">{name}</th>)}
           <th className="min-w-48 px-3 py-2.5 font-medium">区域项目</th>
           <th className="w-12 px-3 py-2.5"></th>
         </tr>
       </thead>
       <tbody>
-        {nodes.length === 0 && <EmptyRow columns={16}>没有符合条件的节点</EmptyRow>}
+        {nodes.length === 0 && <EmptyRow columns={multiProbe ? 17 : 16}>没有符合条件的节点</EmptyRow>}
         {nodes.map(status => <tr key={status.node.id} className="border-t hover:bg-muted/35">
           <td className="px-3 py-2.5"><input type="checkbox" className="size-4 accent-zinc-900" checked={selected.has(status.node.id)} onChange={() => onSelect(status.node.id)} aria-label={`选择 ${status.node.name}`} /></td>
           <td className="max-w-72 px-3 py-2.5">
@@ -180,6 +258,7 @@ function NodeTable({ nodes, selected, onSelect, onDelete }) {
           <td className="px-3 py-2.5"><RegionCell node={status.node} media={status.media} /></td>
           <td className="px-3 py-2.5"><NodeState online={status.online} /></td>
           <td className="px-3 py-2.5 font-mono text-xs tabular-nums">{status.online ? `${status.responseTime} ms` : '-'}</td>
+          {multiProbe && <td className="px-3 py-2.5"><ProbeDots probes={status.probes} /></td>}
           {Object.keys(serviceNames).map(key => <td key={key} className="px-3 py-2.5 text-center"><ServiceState value={status.media?.services?.[key]} /></td>)}
           <td className="px-3 py-2.5"><RegionalServices regional={status.media?.regional} /></td>
           <td className="px-3 py-2.5"><Tooltip content="排除节点"><Button size="icon" variant="ghost" onClick={() => onDelete(status.node)}><Trash2 /></Button></Tooltip></td>
@@ -259,6 +338,7 @@ function ChannelHeader({ icon: Icon, name, detail, enabled, onEnabledChange }) {
 }
 
 function SettingsView({ config, notifications, onSaved, notify }) {
+  const probesSection = <ProbesSection notify={notify} onChanged={onSaved} />;
   const defaultMonitoring = { checkIntervalMinutes: 5, timeoutSeconds: 10, concurrency: 8, retryAttempts: 1, failureThreshold: 2, subscriptionRefreshMinutes: 30, customHealthCheckUrl: '' };
   const [monitoringForm, setMonitoringForm] = useState(config || defaultMonitoring);
   const [channels, setChannels] = useState({
@@ -330,6 +410,8 @@ function SettingsView({ config, notifications, onSaved, notify }) {
       <Button className="mt-6" type="submit" disabled={Boolean(saving)}>{saving === 'monitoring' ? <LoaderCircle className="animate-spin" /> : <Check />}保存检测设置</Button>
     </form>
 
+    {probesSection}
+
     <section className="pt-8">
       <div className="mb-2 flex items-center gap-2"><Bell className="size-4" /><h2 className="text-base font-semibold">状态告警</h2></div>
       <div className="divide-y border-y">
@@ -377,12 +459,21 @@ function App() {
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState(null);
   const [reportKey, setReportKey] = useState(Date.now());
+  const [probes, setProbes] = useState([]);
+  const [probeId, setProbeId] = useState(() => readStored('nw-probe', ''));
+  const [activeProbe, setActiveProbe] = useState(null);
 
   const notify = (text, error = false) => { setMessage({ text, error }); setTimeout(() => setMessage(null), 3500); };
-  const load = async () => {
+  const chooseProbe = id => { setProbeId(id); writeStored('nw-probe', id); };
+  const load = async (probe = probeId) => {
+    const nodeRequest = api(`/api/nodes/public${probe ? `?probe=${encodeURIComponent(probe)}` : ''}`).catch(error => {
+      if (error.status === 404 && probe) { chooseProbe(''); return api('/api/nodes/public'); }
+      throw error;
+    });
     const [nodeData, subData, importData, systemData, configData, notificationData] = await Promise.all([
-      api('/api/nodes/public'), api('/api/subscriptions'), api('/api/imports'), api('/api/system/status'), api('/api/system/config'), api('/api/notifications')
+      nodeRequest, api('/api/subscriptions'), api('/api/imports'), api('/api/system/status'), api('/api/system/config'), api('/api/notifications')
     ]);
+    setActiveProbe(nodeData.probe || null); setProbes(systemData.status.probes || []);
     setNodes(nodeData.stats); setSummary(nodeData.summary); setSubscriptions(subData.subscriptions);
     setImports(importData.imports); setSystem(systemData.status); setMonitoring(configData.config.monitoring); setNotifications(notificationData.notifications);
   };
@@ -404,13 +495,13 @@ function App() {
     return () => { active = false; window.removeEventListener('auth-required', handleRequired); };
   }, []);
   useEffect(() => {
-    if (auth.authenticated) load().catch(error => notify(error.message, true));
-  }, [auth.authenticated]);
+    if (auth.authenticated) load(probeId).catch(error => notify(error.message, true));
+  }, [auth.authenticated, probeId]);
   useEffect(() => {
     if (!auth.authenticated) return undefined;
-    const timer = setInterval(() => load().catch(() => {}), system.jobs?.media?.status === 'running' ? 2500 : 12000);
+    const timer = setInterval(() => load(probeId).catch(() => {}), system.jobs?.media?.status === 'running' ? 2500 : 12000);
     return () => clearInterval(timer);
-  }, [auth.authenticated, system.jobs?.media?.status]);
+  }, [auth.authenticated, system.jobs?.media?.status, probeId]);
 
   const sources = useMemo(() => Array.from(new Set(nodes.map(item => item.node.subscription))).sort(), [nodes]);
   const filtered = useMemo(() => nodes.filter(item => {
@@ -427,7 +518,7 @@ function App() {
   const avgLatency = nodes.filter(item => item.online && item.responseTime).reduce((sum, item, _, all) => sum + item.responseTime / all.length, 0);
 
   const healthCheck = async () => { setBusy('health'); try { await api('/api/nodes/check', { method: 'POST', body: '{}' }); await load(); notify('连通性检测完成'); } catch (error) { notify(error.message, true); } finally { setBusy(''); } };
-  const mediaCheck = async () => { setBusy('media'); try { await api('/api/nodes/media-check', { method: 'POST', body: JSON.stringify({ nodeIds: [...selected] }) }); await load(); notify(selected.size ? `已提交 ${selected.size} 个节点` : '已提交全部节点'); } catch (error) { notify(error.message, true); } finally { setBusy(''); } };
+  const mediaCheck = async () => { setBusy('media'); try { await api('/api/nodes/media-check', { method: 'POST', body: JSON.stringify({ nodeIds: [...selected], probeId: activeProbe?.id || null }) }); await load(); notify(selected.size ? `已提交 ${selected.size} 个节点` : '已提交全部节点'); } catch (error) { notify(error.message, true); } finally { setBusy(''); } };
   const reload = async () => { setBusy('reload'); try { await api('/api/nodes/reload', { method: 'POST', body: '{}' }); await load(); notify('来源已重新加载'); } catch (error) { notify(error.message, true); } finally { setBusy(''); } };
   const exclude = async node => { if (!confirm(`排除节点“${node.name}”？`)) return; try { await api(`/api/nodes/${node.id}`, { method: 'DELETE' }); await load(); } catch (error) { notify(error.message, true); } };
   const select = id => setSelected(current => { const next = new Set(current); next.has(id) ? next.delete(id) : next.add(id); return next; });
@@ -443,7 +534,13 @@ function App() {
 
   return <TooltipProvider><div className="min-h-screen">
     <header className="border-b bg-background"><div className="mx-auto flex h-16 max-w-[1600px] items-center justify-between gap-4 px-4 sm:px-6">
-      <div className="flex min-w-0 items-center gap-3"><div className="flex size-9 items-center justify-center rounded-md border bg-foreground text-background"><Activity className="size-5" /></div><div className="min-w-0"><h1 className="truncate text-sm font-semibold">Node Watcher</h1><div className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className={`size-1.5 rounded-full ${system.mihomoReady ? 'bg-emerald-500' : 'bg-red-500'}`} />Mihomo {system.mihomoReady ? '已连接' : '未连接'}</div></div></div>
+      <div className="flex min-w-0 items-center gap-3"><div className="flex size-9 items-center justify-center rounded-md border bg-foreground text-background"><Activity className="size-5" /></div><div className="min-w-0"><h1 className="truncate text-sm font-semibold">Node Watcher</h1>{(() => {
+        const current = probes.find(item => item.id === activeProbe?.id);
+        const remote = current?.type === 'remote';
+        const ok = remote ? current.connected && current.session?.mihomoReady : system.mihomoReady;
+        const label = remote ? `${current.name} ${current.connected ? (current.session?.mihomoReady ? '在线' : 'Mihomo 未就绪') : '离线'}` : `${probes.length > 1 && current ? `${current.name} · ` : ''}Mihomo ${system.mihomoReady ? '已连接' : '未连接'}`;
+        return <div className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className={`size-1.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-red-500'}`} />{label}</div>;
+      })()}</div></div>
       <div className="flex items-center gap-2">
         <Tooltip content="重新拉取来源"><Button size="icon" variant="outline" aria-label="重新拉取来源" onClick={reload} disabled={Boolean(busy)}>{busy === 'reload' ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}</Button></Tooltip>
         <Button variant="outline" onClick={healthCheck} disabled={Boolean(busy)}>{busy === 'health' ? <LoaderCircle className="animate-spin" /> : <Gauge />}<span className="hidden sm:inline">检测延迟</span></Button>
@@ -459,11 +556,13 @@ function App() {
         <Metric label="离线" value={summary.offline} detail={summary.pending ? `${summary.pending} 个待检测` : '最近一轮检测'} tone={summary.offline ? 'text-red-700' : ''} />
         <Metric label="平均延迟" value={avgLatency ? `${Math.round(avgLatency)} ms` : '-'} detail={formatTime(lastCheck)} />
       </section>
-      {mediaJob?.status === 'running' && <div className="mb-5 rounded-md border bg-muted/40 p-3"><div className="flex items-center justify-between text-sm"><span className="flex min-w-0 items-center gap-2"><LoaderCircle className="size-4 shrink-0 animate-spin" /><span className="truncate">正在检测 {mediaJob.currentNode || '节点'}</span></span><span className="ml-4 shrink-0 font-mono text-xs">{mediaJob.completed}/{mediaJob.total}</span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200"><div className="h-full bg-zinc-800 transition-all" style={{ width: `${mediaJob.total ? mediaJob.completed / mediaJob.total * 100 : 0}%` }} /></div></div>}
+      {mediaJob?.status === 'running' && <div className="mb-5 rounded-md border bg-muted/40 p-3"><div className="flex items-center justify-between text-sm"><span className="flex min-w-0 items-center gap-2"><LoaderCircle className="size-4 shrink-0 animate-spin" /><span className="truncate">{probes.length > 1 && mediaJob.probeId ? `${probes.find(item => item.id === mediaJob.probeId)?.name || mediaJob.probeId} · ` : ''}正在检测 {mediaJob.currentNode || '节点'}</span></span><span className="ml-4 shrink-0 font-mono text-xs">{mediaJob.completed}/{mediaJob.total}</span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200"><div className="h-full bg-zinc-800 transition-all" style={{ width: `${mediaJob.total ? mediaJob.completed / mediaJob.total * 100 : 0}%` }} /></div></div>}
       <Tabs defaultValue="nodes">
         <TabsList><TabsTrigger value="nodes"><Server className="mr-1.5 size-3.5" />节点</TabsTrigger><TabsTrigger value="sources"><Globe2 className="mr-1.5 size-3.5" />来源</TabsTrigger><TabsTrigger value="report"><FileImage className="mr-1.5 size-3.5" />报告</TabsTrigger><TabsTrigger value="settings"><Settings2 className="mr-1.5 size-3.5" />设置</TabsTrigger></TabsList>
         <TabsContent value="nodes">
-          <div className="mb-4 flex flex-wrap items-center gap-2"><div className="relative min-w-56 flex-1 sm:max-w-sm"><Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input className="pl-9" value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索节点、地址或协议" /></div>
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            {probes.length > 1 && <div className="relative"><select aria-label="探针" className="h-9 min-w-36 appearance-none rounded-md border bg-background pl-3 pr-8 text-sm font-medium outline-none focus:ring-2 focus:ring-ring" value={activeProbe?.id || ''} onChange={e => { chooseProbe(e.target.value); setSelected(new Set()); }}>{probes.map(item => <option key={item.id} value={item.id}>{item.name}{item.type === 'remote' && !item.connected ? '（离线）' : ''}</option>)}</select><ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 size-4 text-muted-foreground" /></div>}
+            <div className="relative min-w-56 flex-1 sm:max-w-sm"><Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input className="pl-9" value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索节点、地址或协议" /></div>
             <div className="relative"><select className="h-9 min-w-36 appearance-none rounded-md border bg-background pl-3 pr-8 text-sm outline-none focus:ring-2 focus:ring-ring" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}><option value="all">全部来源</option>{sources.map(source => <option key={source}>{source}</option>)}</select><ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 size-4 text-muted-foreground" /></div>
             <div className="relative"><select className="h-9 appearance-none rounded-md border bg-background pl-3 pr-8 text-sm outline-none focus:ring-2 focus:ring-ring" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option value="all">全部状态</option><option value="online">在线</option><option value="offline">离线</option><option value="pending">待检测</option></select><ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 size-4 text-muted-foreground" /></div>
             <span className="ml-auto text-xs text-muted-foreground">显示 {filtered.length} / {nodes.length}</span>
@@ -471,7 +570,7 @@ function App() {
           <NodeTable nodes={filtered} selected={selected} onSelect={select} onDelete={exclude} />
         </TabsContent>
         <TabsContent value="sources"><SourcesView subscriptions={subscriptions} imports={imports} sourceStatus={system.sourceStatus || []} reload={load} notify={notify} /></TabsContent>
-        <TabsContent value="report"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-base font-semibold">检测报告</h2><p className="mt-1 text-sm text-muted-foreground">当前节点矩阵</p></div><div className="flex gap-2"><Button variant="outline" onClick={() => setReportKey(Date.now())}><RefreshCw />刷新</Button><Button asChild><a href="/api/reports/latest.png" download><Download />下载 PNG</a></Button></div></div><div className="overflow-auto rounded-md border bg-muted/20 p-2"><img key={reportKey} src={`/api/reports/latest.png?t=${reportKey}`} alt="节点检测报告" className="min-w-[900px] max-w-none" /></div></TabsContent>
+        <TabsContent value="report"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-base font-semibold">检测报告</h2><p className="mt-1 text-sm text-muted-foreground">当前节点矩阵</p></div><div className="flex gap-2"><Button variant="outline" onClick={() => setReportKey(Date.now())}><RefreshCw />刷新</Button><Button asChild><a href={`/api/reports/latest.png${activeProbe ? `?probe=${encodeURIComponent(activeProbe.id)}` : ''}`} download><Download />下载 PNG</a></Button></div></div><div className="overflow-auto rounded-md border bg-muted/20 p-2"><img key={`${reportKey}-${activeProbe?.id || ''}`} src={`/api/reports/latest.png?t=${reportKey}${activeProbe ? `&probe=${encodeURIComponent(activeProbe.id)}` : ''}`} alt="节点检测报告" className="min-w-[900px] max-w-none" /></div></TabsContent>
         <TabsContent value="settings"><SettingsView config={monitoring} notifications={notifications} onSaved={load} notify={notify} /></TabsContent>
       </Tabs>
     </main>

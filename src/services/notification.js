@@ -57,15 +57,15 @@ class NotificationService {
   }
 
   // One message for several nodes that changed state in the same check cycle.
-  async sendBatchNotification(kind, entries) {
+  async sendBatchNotification(kind, entries, probeName = null) {
     if (!entries.length) return [];
-    return this.dispatchAlert(this.getBatchAlert(kind, entries), `${entries.length} nodes`);
+    return this.dispatchAlert(this.getBatchAlert(kind, entries, probeName), `${entries.length} nodes`);
   }
 
   // Sent instead of per-node alerts when (almost) every node fails at once: that points at the
   // monitoring host's own network or at Mihomo, not at the nodes.
-  async sendIncidentNotification({ failing, total }, resolved = false) {
-    return this.dispatchAlert(this.getIncidentAlert({ failing, total }, resolved), 'incident');
+  async sendIncidentNotification({ failing, total }, resolved = false, probeName = null) {
+    return this.dispatchAlert(this.getIncidentAlert({ failing, total }, resolved, probeName), 'incident');
   }
 
   getAlert(node, status) {
@@ -74,12 +74,14 @@ class NotificationService {
     const title = online ? '节点恢复通知' : '节点离线告警';
     const address = node.server || node.address || '-';
     const checkedAt = new Date(status.lastCheck || Date.now()).toLocaleString('zh-CN', { hour12: false });
+    const probe = status.probeName ? ` @ ${status.probeName}` : '';
     return {
       online,
       title,
-      subject: `[Node Watcher] ${title} - ${node.name}`,
+      subject: `[Node Watcher] ${title} - ${node.name}${probe}`,
       message: [
         `节点: ${node.name}`,
+        ...(status.probeName ? [`探针: ${status.probeName}`] : []),
         `状态: ${state}`,
         `协议: ${node.protocol || '-'}`,
         `地址: ${address}:${node.port || '-'}`,
@@ -89,9 +91,9 @@ class NotificationService {
     };
   }
 
-  getBatchAlert(kind, entries) {
+  getBatchAlert(kind, entries, probeName = null) {
     const online = kind === 'recovered';
-    const title = `${online ? '节点恢复通知' : '节点离线告警'}（${entries.length} 个节点）`;
+    const title = `${online ? '节点恢复通知' : '节点离线告警'}（${entries.length} 个节点${probeName ? ` @ ${probeName}` : ''}）`;
     const lines = entries.slice(0, MAX_LISTED_NODES).map(({ node, status }) => {
       const detail = online ? '' : ` — ${clip(status?.error || '连接超时', 60)}`;
       return `${online ? '🟢' : '🔴'} ${node.name} (${node.server || node.address || '-'}:${node.port || '-'})${detail}`;
@@ -106,11 +108,12 @@ class NotificationService {
     };
   }
 
-  getIncidentAlert({ failing, total }, resolved) {
-    const title = resolved ? '检测已恢复正常' : '大量节点同时检测失败';
+  getIncidentAlert({ failing, total }, resolved, probeName = null) {
+    const where = probeName ? `探针 ${probeName}` : '监控主机';
+    const title = `${resolved ? '检测已恢复正常' : '大量节点同时检测失败'}${probeName ? ` @ ${probeName}` : ''}`;
     const message = resolved
-      ? `失败节点已降至 ${failing}/${total}，逐节点告警恢复。`
-      : `${failing}/${total} 个节点同时检测失败，更可能是监控主机网络或 Mihomo 异常而非节点本身故障，已暂停逐节点告警。`;
+      ? `${where}的失败节点已降至 ${failing}/${total}，逐节点告警恢复。`
+      : `${where}上 ${failing}/${total} 个节点同时检测失败，更可能是${where}${probeName ? ' 的' : ''}网络或 Mihomo 异常而非节点本身故障，已暂停该处的逐节点告警。`;
     return { online: resolved, title, subject: `[Node Watcher] ${title}`, message };
   }
 

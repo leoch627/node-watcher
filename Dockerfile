@@ -22,7 +22,7 @@ LABEL org.opencontainers.image.title="Node Watcher" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 
 WORKDIR /app
-RUN apk add --no-cache ca-certificates curl gzip tini font-noto-cjk \
+RUN apk add --no-cache ca-certificates curl gzip openssl tini font-noto-cjk \
     && image_arch="${TARGETARCH}" \
     && if [ -z "${image_arch}" ]; then case "$(apk --print-arch)" in x86_64) image_arch=amd64 ;; aarch64) image_arch=arm64 ;; esac; fi \
     && case "${image_arch}" in \
@@ -49,7 +49,8 @@ ENV NODE_ENV=production \
     CONFIG_FILE=/app/data/config.json
 
 VOLUME ["/app/data", "/app/logs"]
-EXPOSE 3000
+# 3000: web dashboard (master)   7443: TLS listener for remote probes (master)
+EXPOSE 3000 7443
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD wget -qO- http://127.0.0.1:3000/api/ready >/dev/null || exit 1
 

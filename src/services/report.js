@@ -39,7 +39,7 @@ function cell(x, y, width, text, fill = '#ffffff', color = '#334155', align = 'l
 }
 
 class ReportService {
-  async render(statuses) {
+  async render(statuses, { probeName = null } = {}) {
     const widths = [250, 160, 100, 90, 90, ...SERVICES.map(() => 120), 300];
     const width = widths.reduce((sum, value) => sum + value, 0) + 48;
     const height = 126 + Math.max(1, statuses.length) * 44 + 58;
@@ -85,7 +85,7 @@ class ReportService {
       <rect width="100%" height="100%" fill="#ffffff"/>
       <style>text { font-family: "Noto Sans CJK SC", "PingFang SC", Arial, sans-serif; letter-spacing: 0; }</style>
       <text x="24" y="39" fill="#0f172a" font-size="24" font-weight="700">Node Watcher 检测报告</text>
-      <text x="24" y="64" fill="#64748b" font-size="13">${escapeXml(statuses.length)} 个节点 · ${escapeXml(checkedAt)}</text>
+      <text x="24" y="64" fill="#64748b" font-size="13">${escapeXml(statuses.length)} 个节点${probeName ? ` · 探针 ${escapeXml(probeName)}` : ''} · ${escapeXml(checkedAt)}</text>
       ${rows}
       <text x="24" y="${height - 23}" fill="#64748b" font-size="12">结果受目标平台策略与网络波动影响，仅供参考</text>
     </svg>`;

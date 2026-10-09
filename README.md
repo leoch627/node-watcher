@@ -16,6 +16,7 @@ Node Watcher 使用 Mihomo 执行代理检测，提供 Web 管理界面、状态
 | 状态告警 | 支持 Bark、SMTP 邮件和 Telegram Bot，可分别启用和测试 |
 | 检测报告 | 将当前节点状态和服务检测结果生成 PNG 矩阵，可预览、下载 |
 | 登录保护 | 管理员登录、签名会话 Cookie、登录失败限速 |
+| 分布式探针 | 主控部署在公网，探针部署在不同网络，通过 TLS 私有协议连回主控，用同一份订阅从多个地点检测并对比 |
 
 ## 快速开始
 
@@ -309,6 +310,90 @@ Disney+、TikTok、HBO Max 及其他区域项目没有回显客户端 IP 的接�
 
 当前节点状态和流媒体结果保存在内存中，重启后需重新检测，首次检测也会重新建立告警基线；在线率历史会从磁盘恢复。
 
+## 分布式探针
+
+一台**主控**（公网，Web 面板、订阅、告警、汇总）加任意台**探针**（不同运营商 / 地区 / 家宽 / 机房），同一份订阅在每个网络里各测一遍。
+
+```text
+   探针 A（上海电信）──┐
+   探针 B（广州移动）──┼── TLS 1.3 ──▶  主控 :7443   ◀── HTTPS ── 浏览器
+   探针 C（东京家宽）──┘                 :3000（面板，经反向代理）
+```
+
+- 探针只**主动连出**到主控，不开放任何端口；家宽、NAT 后面都能用。
+- 主控统一调度：每轮检测同时下发给本机（可关闭）和所有在线探针，结果按探针分别记录状态、在线率历史和告警。
+- 面板「节点」页可切换探针查看，「各探针」列用圆点对比同一节点在每个网络的状态（悬停看延迟）；流媒体检测和 PNG 报告都跟随所选探针。
+- 告警会注明探针，例如「节点离线告警 - 东京 01 @ 上海电信」；某个探针上 80% 以上节点同时失败时，只发一条「该探针网络异常」而不是逐节点告警。
+- 探针断开超过 `max(3 分钟, 2 × 检测周期)` 会发「探针离线」告警，重连后发「探针已恢复」。
+
+### 协议与安全
+
+| 项目 | 做法 |
+| --- | --- |
+| 传输 | TLS 1.3，4 字节长度前缀 + JSON 帧，20 秒心跳，65 秒无流量断开重连（退避 1–30 秒） |
+| 主控身份 | 首次启动用 `openssl` 生成自签证书（`data/probe-tls/`），探针在加入串里**固定证书 SHA-256 指纹**，中间人无法冒充主控；也可用 `PROBE_TLS_CERT_FILE` / `PROBE_TLS_KEY_FILE` 指定正式证书（此时加入串仍带指纹） |
+| 探针身份 | 每个探针一个 192 位随机 token，主控只保存其 SHA-256；可在面板停用、重置或删除，立即断开 |
+| 防扫描 / DoS | 握手 10 秒超时；鉴权前单帧上限 64 KB；同一 IP 10 分钟内鉴权失败 10 次即拒绝；同时握手中的连接上限 64 |
+| 重复部署 | 两台机器用了同一个加入串时，后连上的保留，被顶替的探针改为 5 分钟后重试并在日志中说明，不会互相抢连接 |
+| 探针权限 | 探针只执行固定操作（加载节点、测活、流媒体检测），不执行主控下发的任何命令或脚本 |
+
+加入串格式：`nwp://<探针ID>:<token>@<主控地址>:<端口>?fp=<证书指纹>`，相当于密码，**只在创建 / 重置时显示一次**。
+
+### 部署步骤
+
+1. **主控**按「快速开始」部署，并放行 TCP `7443`（防火墙 + 云安全组）。用一键脚本部署的，在部署目录的 `.env` 里加一行 `PROBE_PORT=7443` 后重新运行脚本，才会映射该端口（默认不映射，避免与已有服务冲突）。如果面板通过域名访问，加入串会自动使用该域名；否则设置 `PROBE_PUBLIC_HOST`（以及端口映射时的 `PROBE_PUBLIC_PORT`）。
+2. 面板「设置 → 探针」输入名称并点「添加探针」，复制弹窗中的命令。
+3. 在目标网络的机器上运行（任选其一）：
+
+   ```bash
+   # Docker
+   docker run -d --name node-watcher-probe --restart unless-stopped \
+     -e NODE_WATCHER_MODE=agent -e NODE_WATCHER_JOIN='nwp://...' \
+     ghcr.io/leoch627/node-watcher:latest
+
+   # Docker Compose：把 NODE_WATCHER_JOIN 写进 .env
+   docker compose -f docker-compose.probe.yml up -d
+
+   # 源码（需要 Node.js 22 和 mihomo）
+   NODE_WATCHER_MODE=agent NODE_WATCHER_JOIN='nwp://...' npm start
+   ```
+
+4. 探针连上后几秒内自动测一轮，之后跟随主控的检测周期。
+
+| 变量（主控） | 默认值 | 说明 |
+| --- | --- | --- |
+| `PROBE_PORT` | `7443` | 探针监听端口；`0` 关闭 |
+| `PROBE_LISTEN` | `0.0.0.0` | 探针监听地址 |
+| `PROBE_PUBLIC_HOST` | 打开面板时使用的主机名 | 写进加入串的主控地址 |
+| `PROBE_PUBLIC_PORT` | 同 `PROBE_PORT` | 端口映射 / NAT 时写进加入串的端口 |
+| `PROBE_TLS_CERT_FILE` / `PROBE_TLS_KEY_FILE` | 自动生成自签证书 | 使用自有证书 |
+| `LOCAL_PROBE` | `true` | 主控本机是否也检测；设为 `false` 时主控不启动 Mihomo，只汇总探针 |
+| `LOCAL_PROBE_NAME` | `本机` | 本机探针在面板和告警中的名字 |
+| `PROBE_IMAGE` | `ghcr.io/leoch627/node-watcher:latest` | 面板生成的 docker 命令里使用的镜像 |
+
+| 变量（探针） | 说明 |
+| --- | --- |
+| `NODE_WATCHER_MODE=agent` | 以探针模式运行（无面板、无订阅、无告警） |
+| `NODE_WATCHER_JOIN` | 加入串；也可以拆成 `MASTER_ADDR`（host:port）、`PROBE_ID`、`PROBE_TOKEN`、`MASTER_FINGERPRINT` |
+| `MEDIA_CONCURRENCY` | 流媒体并行槽位（实验性，同上文） |
+
+探针容器的健康检查访问容器内 `127.0.0.1:3000/api/ready`：Mihomo 就绪且已连上主控时为 200。
+
+### 公网部署建议
+
+- 面板（3000）放在 HTTPS 反向代理之后，并设置 `AUTH_COOKIE_SECURE=true`、`TRUST_PROXY=1`；不要把 3000 端口直接暴露到公网。最简单的 Caddy 配置：
+
+  ```caddyfile
+  watch.example.com {
+      reverse_proxy 127.0.0.1:3000
+  }
+  ```
+
+- 7443 是原始 TLS 端口，**不要**经过 HTTP 反向代理或 CDN，直接放行即可。
+- 面板已加安全响应头（CSP、`X-Frame-Options: DENY`、`nosniff`、`no-referrer`），HTTPS 下附带 HSTS。
+- 用强密码；`AUTH_SESSION_SECRET` 留空时会生成随机密钥保存在 `data/.session-secret`。
+- 订阅 token、节点凭据会通过加密通道下发给探针，探针机器同样要可信。
+
 ## 配置说明
 
 登录与 Mihomo 启动参数由环境变量控制；订阅、导入内容、检测设置和通知渠道保存在配置文件中，可通过面板管理。
@@ -457,6 +542,8 @@ node-watcher.sh     一键部署、依赖安装、参数配置、随机端口与
 client/             React 前端与界面组件
 src/routes/         HTTP API 路由
 src/services/       节点解析、订阅、检测、告警、鉴权与报告
+src/probe/          主控 ↔ 探针 TLS 协议、探针注册表、证书
+src/agent.js        探针模式入口（NODE_WATCHER_MODE=agent）
 src/utils/          配置和日志工具
 test/               自动化测试
 public/             前端构建产物
@@ -486,13 +573,18 @@ docker buildx build \
 | `GET` | `/api/auth/session` | 查询登录状态 |
 | `POST` | `/api/auth/login` | 登录 |
 | `POST` | `/api/auth/logout` | 退出登录 |
-| `GET` | `/api/nodes/public` | 节点状态、在线率与服务检测结果，仍需登录 |
+| `GET` | `/api/nodes/public` | 节点状态、在线率与服务检测结果，仍需登录；`?probe=<探针ID>` 查看指定探针，多探针时每个节点附带 `probes` 对比 |
 | `POST` | `/api/nodes/reload` | 重新加载来源 |
 | `POST` | `/api/nodes/check` | 执行连通性检测；请求体可传 `{"reload":true}` 先刷新来源 |
-| `POST` | `/api/nodes/media-check` | 创建流媒体检测任务；请求体可传 `{"nodeIds":["节点ID"]}`，空数组检测全部 |
+| `POST` | `/api/nodes/media-check` | 创建流媒体检测任务；请求体可传 `{"nodeIds":["节点ID"],"probeId":"探针ID"}`，空数组检测全部 |
 | `GET` | `/api/nodes/jobs` | 查询检测任务进度 |
 | `GET` | `/api/system/status` | 系统、来源与 Mihomo 状态 |
-| `GET` | `/api/reports/latest.png` | 根据当前结果生成 PNG 报告 |
+| `GET` | `/api/reports/latest.png` | 根据当前结果生成 PNG 报告；`?probe=<探针ID>` 指定探针 |
+| `GET` | `/api/probes` | 探针列表、连接状态与监听信息 |
+| `POST` | `/api/probes` | 创建探针 `{"name":"…"}`，返回加入串与部署命令（仅此一次） |
+| `POST` | `/api/probes/:id/rotate` | 重置探针密钥，返回新的加入串 |
+| `PATCH` | `/api/probes/:id` | 改名或启用 / 停用 `{"name":"…","enabled":false}` |
+| `DELETE` | `/api/probes/:id` | 删除探针及其历史 |
 
 ## 常见问题
 
@@ -525,6 +617,14 @@ docker buildx imagetools inspect ghcr.io/leoch627/node-watcher:latest
 **重启后流媒体结果消失？**
 
 流媒体结果不持久化，请重新触发流媒体检测。检测出错时会保留同一进程内上次成功的结果。PNG 报告根据当前内存中的结果生成，不是历史报告归档。
+
+**GitHub Actions 推送镜像时报 `denied: permission_denied: write_package`？**
+
+GHCR 上的 `node-watcher` 镜像包没有授权给当前仓库（常见于删除后重建同名仓库）。到 GitHub 个人主页 → Packages → `node-watcher` → Package settings → Manage Actions access，添加本仓库并设为 Write，然后在 Actions 页面重新运行失败的工作流；或者删除该镜像包，让工作流重新创建。
+
+**探针一直显示离线？**
+
+在探针机器上查看日志：`Master certificate fingerprint mismatch` 表示加入串里的指纹与主控证书不符（主控重新生成过证书时需重新创建加入串）；`Authentication failed` 表示 token 已被重置或探针已删除；`Another probe connected with the same join string` 表示两台机器用了同一个加入串。连接超时则检查主控的 7443 端口是否放行、`PROBE_PUBLIC_HOST` 是否为探针能访问到的地址。
 
 ## 许可证与致谢
 

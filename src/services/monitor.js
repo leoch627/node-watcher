@@ -1,13 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 const logger = require('../utils/logger');
-const mihomoService = require('./mihomo');
+const prober = require('./prober');
 const { writeFileAtomic } = require('../utils/atomicWrite');
 
 const HOUR = 3600000;
 const RETENTION_MS = 31 * 24 * HOUR;
 const SAVE_DEBOUNCE_MS = 2000;
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 class MonitorService {
   constructor(options = {}) {
@@ -139,28 +138,23 @@ class MonitorService {
     return safe;
   }
 
-  async probe(node, timeout, { url, retries }) {
-    let result;
-    for (let attempt = 0; attempt <= retries; attempt += 1) {
-      result = await mihomoService.testNode(node.proxyName || node.name, timeout, url);
-      if (result.skipped || result.online) break;
-      if (attempt < retries) await sleep(1000);
-    }
-    return result;
-  }
-
   // Returns the updated status, or null when monitoring itself was unavailable (Mihomo not ready,
   // proxy not loaded). Those probes say nothing about the node, so they must not touch state or history.
   async checkNode(node, timeout = 10000, options = {}) {
     const retries = Math.max(0, Math.min(3, Number(options.retries) || 0));
-    const result = await this.probe(node, timeout, { url: options.url, retries });
-    if (result.skipped) return null;
+    const result = await prober.probeNode(node, timeout, { url: options.url, retries });
+    return this.applyProbeResult(node, result, options);
+  }
+
+  // Records one probe result (local or reported by a remote probe).
+  applyProbeResult(node, result, options = {}) {
+    if (!result || result.skipped || typeof result.online !== 'boolean') return null;
     const status = {
       online: result.online,
-      responseTime: result.latency,
-      lastCheck: new Date().toISOString(),
+      responseTime: Number.isFinite(result.latency) ? result.latency : null,
+      lastCheck: result.lastCheck || new Date().toISOString(),
       error: result.error || null,
-      checkMethod: 'mihomo'
+      checkMethod: options.checkMethod || 'mihomo'
     };
     const updated = this.updateNodeStatus(node, status, options);
     this.recordHistory(node, result.online);
