@@ -7,6 +7,9 @@ node_modules/
 # Configuration
 config.json
 
+# Local subscription dumps (contain node credentials)
+sub_*
+
 # Mihomo
 mihomo
 mihomo-config.yaml
