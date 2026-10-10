@@ -1,3 +1,4 @@
+require('../test-support/isolate');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -188,4 +189,43 @@ test('a probe that gets replaced or rejected backs off instead of fighting for t
   assert.ok(delays[0] >= 3.5 * 60000, `reconnect delay ${delays[0]}`);
   first.stop();
   second.stop();
+});
+
+test('probe changes are rolled back when the configuration cannot be saved', () => {
+  const store = { probes: [] };
+  let writable = true;
+  const registry = new ProbeRegistry({
+    config: { getConfig: () => store, saveConfig: () => writable },
+    localMonitor: new MonitorService({ historyPath: path.join(fs.mkdtempSync(path.join(dir, 'r-')), 'history.json') })
+  });
+  const { probe, token } = registry.create('Kept');
+  writable = false;
+  assert.throws(() => registry.create('Lost'), /Could not save/);
+  assert.deepEqual(store.probes.map(item => item.name), ['Kept']);
+  assert.throws(() => registry.rotateToken(probe.id), /Could not save/);
+  assert.ok(registry.authenticate(probe.id, token), 'old token still valid');
+  assert.throws(() => registry.update(probe.id, { name: 'Renamed', enabled: false }), /Could not save/);
+  assert.equal(registry.find(probe.id).name, 'Kept');
+  assert.equal(registry.find(probe.id).enabled, true);
+  assert.throws(() => registry.remove(probe.id), /Could not save/);
+  assert.ok(registry.find(probe.id), 'still present');
+  writable = true;
+  assert.equal(registry.remove(probe.id), true);
+  assert.equal(store.probes.length, 0);
+});
+
+test('the TLS handshake itself is bounded, not just the authentication step', async t => {
+  const store = { probes: [] };
+  const registry = new ProbeRegistry({
+    config: { getConfig: () => store, saveConfig: () => true },
+    localMonitor: new MonitorService({ historyPath: path.join(fs.mkdtempSync(path.join(dir, 'h-')), 'history.json') })
+  });
+  const hub = new ProbeHub({ registry, cert: certificate.cert, key: certificate.key, host: '127.0.0.1', port: 0, handshakeTimeoutMs: 300 });
+  await hub.start();
+  t.after(async () => { await hub.stop(); });
+  // A peer that opens TCP but never starts the TLS handshake must be dropped by the server.
+  const started = Date.now();
+  const socket = require('node:net').connect(hub.port, '127.0.0.1');
+  await new Promise(resolve => socket.once('close', resolve));
+  assert.ok(Date.now() - started < 3000, `closed after ${Date.now() - started} ms`);
 });

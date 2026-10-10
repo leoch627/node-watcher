@@ -101,3 +101,11 @@ test('only reachable services get an unlock type, and the raw platformIp key is 
   assert.equal(annotateUnlock(noEcho, exits), noEcho);
   assert.equal(annotateUnlock(null, exits), null);
 });
+
+test('equivalent IPv6 spellings and IPv4-mapped addresses compare equal', () => {
+  assert.equal(classifyUnlock('2001:0DB8:0:0:0:0:0:1', ['2001:db8::1', '2001:db8::1']).unlockType, 'native');
+  assert.equal(classifyUnlock('::ffff:1.2.3.4', ['1.2.3.4']).unlockType, 'native');
+  assert.equal(classifyUnlock('::ffff:102:304', ['1.2.3.4']).unlockType, 'native');
+  assert.equal(classifyUnlock('2001:db8::2', ['2001:db8::1']).unlockType, 'dns');
+  assert.equal(extractPlatformIp('"remoteHost":"2001:DB8:0::1"'), '2001:db8::1');
+});

@@ -14,6 +14,9 @@ const INCIDENT_MIN_NODES = 5;
 const INCIDENT_FAIL_RATIO = 0.8;
 const INCIDENT_CLEAR_RATIO = 0.5;
 
+// True when at least one notification channel reported a successful delivery.
+const delivered = outcome => Array.isArray(outcome) && outcome.some(item => item && item.success === true);
+
 const clamp = (value, min, max, fallback) => {
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : fallback;
@@ -288,11 +291,13 @@ class SchedulerService {
       const timer = setTimeout(() => {
         this.probeDownTimers.delete(probe.id);
         if (hub.connectedIds().includes(probe.id) || !registry.find(probe.id)) return;
-        this.probeAlerted.add(probe.id);
         notificationService.dispatchAlert({
           online: false, title: '探针离线', subject: `[Node Watcher] 探针离线 - ${probe.name}`,
           message: `探针 ${probe.name} 已断开超过 ${Math.round(grace / 60000)} 分钟，期间不再从该网络检测节点。`
-        }, `probe ${probe.name}`).catch(() => {});
+        }, `probe ${probe.name}`).then(outcome => {
+          // Only a delivered "offline" message earns a "recovered" message later.
+          if (delivered(outcome)) this.probeAlerted.add(probe.id);
+        }).catch(() => {});
       }, grace);
       timer.unref?.();
       this.probeDownTimers.set(probe.id, timer);
@@ -303,33 +308,41 @@ class SchedulerService {
   //  - if (nearly) every node failed at once, send a single "monitor-side incident" message instead;
   //  - several events in one cycle are merged into one message;
   //  - alert state is only committed after a notification was dispatched, so suppressed alerts are not lost.
+  // Turns this cycle's alert events into notifications. Alert state (offline alert sent, incident
+  // active) only changes once at least one channel actually delivered the message: channel failures
+  // are returned as { success: false } rather than thrown, and with every channel down (or none
+  // enabled yet) the event must stay pending so it is retried on the next cycle.
   async dispatchAlerts(results, totalNodes, { monitor = monitorService, probe = null } = {}) {
     const key = probe?.id || 'local';
     const probeName = probe?.name || null;
     const failing = results.filter(item => item.online === false).length;
-    const failRatio = results.length ? failing / results.length : 0;
+    // Fraction of *all* nodes, not of the results that came back: skipped probes must not turn a
+    // single failure into an apparent outage.
+    const failRatio = totalNodes > 0 ? failing / totalNodes : 0;
     if (totalNodes >= INCIDENT_MIN_NODES && failRatio >= INCIDENT_FAIL_RATIO) {
       if (!this.incidents.get(key)) {
-        this.incidents.set(key, true);
         logger.warn(`${failing}/${totalNodes} nodes failed in one cycle${probeName ? ` on probe ${probeName}` : ''}; suppressing per-node alerts`);
-        await notificationService.sendIncidentNotification({ failing, total: totalNodes }, false, probeName);
+        const outcome = await notificationService.sendIncidentNotification({ failing, total: totalNodes }, false, probeName);
+        if (delivered(outcome)) this.incidents.set(key, true);
       }
       return;
     }
     if (this.incidents.get(key) && failRatio <= INCIDENT_CLEAR_RATIO) {
-      this.incidents.set(key, false);
-      await notificationService.sendIncidentNotification({ failing, total: totalNodes }, true, probeName);
+      const outcome = await notificationService.sendIncidentNotification({ failing, total: totalNodes }, true, probeName);
+      if (delivered(outcome)) this.incidents.set(key, false);
     }
     for (const kind of ['offline', 'recovered']) {
       const entries = results.filter(item => item.alertEvent === kind).map(status => ({ node: status.node, status }));
       if (entries.length === 0) continue;
       if (entries.length > MAX_INDIVIDUAL_ALERTS) {
-        await notificationService.sendBatchNotification(kind, entries, probeName);
+        const outcome = await notificationService.sendBatchNotification(kind, entries, probeName);
+        if (delivered(outcome)) for (const { node } of entries) monitor.markAlertSent(node.id, kind);
       } else {
-        await Promise.all(entries.map(({ node, status }) =>
-          notificationService.sendNotification(node, { ...status, statusChanged: true, probeName })));
+        await Promise.all(entries.map(async ({ node, status }) => {
+          const outcome = await notificationService.sendNotification(node, { ...status, statusChanged: true, probeName });
+          if (delivered(outcome)) monitor.markAlertSent(node.id, kind);
+        }));
       }
-      for (const { node } of entries) monitor.markAlertSent(node.id, kind);
     }
   }
 

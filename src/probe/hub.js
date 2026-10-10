@@ -95,13 +95,14 @@ class Session {
 // TLS listener for remote probes on the master.
 // Events: 'connect' (probe), 'disconnect' (probe), 'status' (probe)
 class ProbeHub extends EventEmitter {
-  constructor({ registry, cert, key, host = '0.0.0.0', port = 7443 }) {
+  constructor({ registry, cert, key, host = '0.0.0.0', port = 7443, handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS }) {
     super();
     this.registry = registry;
     this.cert = cert;
     this.key = key;
     this.host = host;
     this.port = port;
+    this.handshakeTimeoutMs = handshakeTimeoutMs;
     this.sessions = new Map();
     this.lastSeen = new Map();
     this.failures = new Map();
@@ -114,8 +115,14 @@ class ProbeHub extends EventEmitter {
   }
 
   start() {
-    this.server = tls.createServer({ cert: this.cert, key: this.key, minVersion: 'TLSv1.3' }, socket => this.accept(socket));
-    this.server.on('tlsClientError', () => { /* scanners and failed handshakes: ignore */ });
+    // handshakeTimeout bounds the TLS handshake itself (Node's default is 120 s); the auth timer in
+    // accept() only starts once the handshake has completed.
+    this.server = tls.createServer({
+      cert: this.cert, key: this.key, minVersion: 'TLSv1.3', handshakeTimeout: this.handshakeTimeoutMs
+    }, socket => this.accept(socket));
+    // Failed or timed-out handshakes (scanners, idle TCP connections). Registering this listener
+    // turns off Node's automatic destroy, so the socket must be destroyed here.
+    this.server.on('tlsClientError', (error, socket) => socket.destroy());
     this.heartbeat = setInterval(() => this.tick(), HEARTBEAT_MS);
     this.heartbeat.unref?.();
     return new Promise((resolve, reject) => {
@@ -164,7 +171,7 @@ class ProbeHub extends EventEmitter {
       if (handshaking) { handshaking = false; this.handshakes -= 1; }
     };
     const decoder = new FrameDecoder(MAX_HELLO_BYTES);
-    const timer = setTimeout(() => { finishHandshake(); socket.destroy(); }, HANDSHAKE_TIMEOUT_MS);
+    const timer = setTimeout(() => { finishHandshake(); socket.destroy(); }, this.handshakeTimeoutMs);
     timer.unref?.();
     socket.setNoDelay(true);
     socket.setKeepAlive(true, 30000);

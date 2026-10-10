@@ -69,22 +69,36 @@ class ProbeRegistry {
     return this.list()[0]?.id || LOCAL_ID;
   }
 
+  // Persists a change made by `apply`; when saving fails the in-memory change is undone with `undo`
+  // and an error is thrown, so memory and config.json never disagree (and no token is handed out
+  // for a probe that would vanish on restart).
+  commit(apply, undo) {
+    apply();
+    if (this.config.saveConfig()) return;
+    undo();
+    throw new Error('Could not save configuration');
+  }
+
   create(name) {
     const clean = String(name || '').trim().slice(0, 40);
     if (!clean) throw new Error('Probe name is required');
     const id = `p-${crypto.randomBytes(4).toString('hex')}`;
     const token = crypto.randomBytes(24).toString('base64url');
-    this.records().push({ id, name: clean, tokenHash: hashToken(token), enabled: true, createdAt: new Date().toISOString() });
-    if (!this.config.saveConfig()) throw new Error('Could not save configuration');
-    return { probe: this.find(id), token };
+    const record = { id, name: clean, tokenHash: hashToken(token), enabled: true, createdAt: new Date().toISOString() };
+    const records = this.records();
+    this.commit(() => records.push(record), () => {
+      const index = records.indexOf(record);
+      if (index >= 0) records.splice(index, 1);
+    });
+    return { probe: record, token };
   }
 
   rotateToken(id) {
     const record = this.find(id);
     if (!record) return null;
     const token = crypto.randomBytes(24).toString('base64url');
-    record.tokenHash = hashToken(token);
-    this.config.saveConfig();
+    const previous = record.tokenHash;
+    this.commit(() => { record.tokenHash = hashToken(token); }, () => { record.tokenHash = previous; });
     this.hub?.disconnect(id, 'Token rotated');
     return token;
   }
@@ -92,9 +106,11 @@ class ProbeRegistry {
   update(id, { name, enabled } = {}) {
     const record = this.find(id);
     if (!record) return null;
-    if (typeof name === 'string' && name.trim()) record.name = name.trim().slice(0, 40);
-    if (typeof enabled === 'boolean') record.enabled = enabled;
-    this.config.saveConfig();
+    const previous = { name: record.name, enabled: record.enabled };
+    this.commit(() => {
+      if (typeof name === 'string' && name.trim()) record.name = name.trim().slice(0, 40);
+      if (typeof enabled === 'boolean') record.enabled = enabled;
+    }, () => Object.assign(record, previous));
     if (record.enabled === false) this.hub?.disconnect(id, 'Probe disabled');
     return record;
   }
@@ -103,8 +119,8 @@ class ProbeRegistry {
     const records = this.records();
     const index = records.findIndex(item => item.id === id);
     if (index < 0) return false;
-    records.splice(index, 1);
-    this.config.saveConfig();
+    const record = records[index];
+    this.commit(() => records.splice(index, 1), () => records.splice(index, 0, record));
     this.hub?.disconnect(id, 'Probe removed');
     const monitor = this.monitors.get(id);
     if (monitor?.saveTimer) clearTimeout(monitor.saveTimer);

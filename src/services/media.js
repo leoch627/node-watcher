@@ -24,9 +24,27 @@ const PLATFORM_IP_PATTERNS = [
   /customerIPAddress(?:"|&#34;)\s*:\s*(?:"|&#34;)([^"&]+)/
 ];
 
+// Canonical text form so equivalent spellings compare equal: IPv6 is compressed and lower-cased
+// (2001:0db8:0:0::1 -> 2001:db8::1), IPv4-mapped IPv6 (::ffff:1.2.3.4) becomes plain IPv4.
 function cleanIp(value) {
-  const ip = String(value || '').split(',')[0].trim();
-  return net.isIP(ip) ? ip : null;
+  let ip = String(value || '').split(',')[0].trim().replace(/^\[|\]$/g, '');
+  const family = net.isIP(ip);
+  if (family === 4) return ip;
+  if (family !== 6) return null;
+  try {
+    ip = new URL(`http://[${ip}]/`).hostname.slice(1, -1);
+  } catch (_) {
+    return null;
+  }
+  const mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (mapped) return mapped[1];
+  const mappedHex = ip.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (mappedHex) {
+    const high = parseInt(mappedHex[1], 16);
+    const low = parseInt(mappedHex[2], 16);
+    return [high >> 8, high & 255, low >> 8, low & 255].join('.');
+  }
+  return ip;
 }
 
 function extractPlatformIp(body) {

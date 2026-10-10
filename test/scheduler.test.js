@@ -68,12 +68,13 @@ test('node loads run one at a time and a failed load does not break later ones',
   assert.deepEqual(order, ['start-1', 'end-1', 'start-2', 'end-2', 'start-3', 'end-3']);
 });
 
-function alertHarness() {
+function alertHarness({ ok = true } = {}) {
   const calls = { single: [], batch: [], incident: [], marked: [] };
+  const outcome = () => [{ service: 'telegram', success: ok, ...(ok ? {} : { error: 'channel down' }) }];
   const restoreNotification = stub(notificationService, {
-    sendNotification: async (node, status) => { calls.single.push([node.id, status.online, status.statusChanged]); return []; },
-    sendBatchNotification: async (kind, entries) => { calls.batch.push([kind, entries.length]); return []; },
-    sendIncidentNotification: async (info, resolved) => { calls.incident.push([info.failing, info.total, resolved]); return []; }
+    sendNotification: async (node, status) => { calls.single.push([node.id, status.online, status.statusChanged]); return outcome(); },
+    sendBatchNotification: async (kind, entries) => { calls.batch.push([kind, entries.length]); return outcome(); },
+    sendIncidentNotification: async (info, resolved) => { calls.incident.push([info.failing, info.total, resolved]); return outcome(); }
   });
   const restoreMonitor = stub(monitorService, {
     markAlertSent: (id, kind) => { calls.marked.push([id, kind]); }
@@ -168,4 +169,63 @@ test('media checks skip offline nodes and keep their earlier results', async () 
   } finally {
     restore();
   }
+});
+
+test('alerts that no channel delivered stay pending and are retried', async () => {
+  const scheduler = new SchedulerService();
+  const failing = alertHarness({ ok: false });
+  try {
+    const results = [result('a', false, 'offline'), ...['b', 'c', 'd', 'e', 'f'].map(id => result(id, true))];
+    await scheduler.dispatchAlerts(results, results.length);
+    assert.deepEqual(failing.calls.single, [['a', false, true]]);
+    assert.deepEqual(failing.calls.marked, [], 'not committed when every channel failed');
+  } finally {
+    failing.restore();
+  }
+  const working = alertHarness({ ok: true });
+  try {
+    const results = [result('a', false, 'offline'), ...['b', 'c', 'd', 'e', 'f'].map(id => result(id, true))];
+    await scheduler.dispatchAlerts(results, results.length);
+    assert.deepEqual(working.calls.marked, [['a', 'offline']]);
+  } finally {
+    working.restore();
+  }
+});
+
+test('an undelivered incident notice is retried and does not leave alerts suppressed for good', async () => {
+  const scheduler = new SchedulerService();
+  const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'];
+  const storm = ids.map(id => result(id, false, 'offline'));
+  const failing = alertHarness({ ok: false });
+  try {
+    await scheduler.dispatchAlerts(storm, ids.length);
+    await scheduler.dispatchAlerts(storm, ids.length);
+    assert.equal(failing.calls.incident.length, 2, 'retried on the next cycle');
+  } finally {
+    failing.restore();
+  }
+  const working = alertHarness({ ok: true });
+  try {
+    await scheduler.dispatchAlerts(storm, ids.length);
+    await scheduler.dispatchAlerts(storm, ids.length);
+    assert.equal(working.calls.incident.length, 1, 'sent once after it got through');
+    const calm = ids.map(id => result(id, true));
+    await scheduler.dispatchAlerts(calm, ids.length);
+    assert.deepEqual(working.calls.incident.at(-1), [0, 10, true]);
+  } finally {
+    working.restore();
+  }
+});
+
+test('skipped probes do not inflate the failure ratio into an incident', async () => {
+  const scheduler = new SchedulerService();
+  const { calls, restore } = alertHarness();
+  try {
+    // 10 nodes, but only 1 result came back (the rest were skipped) and it is a failure.
+    await scheduler.dispatchAlerts([result('a', false, 'offline')], 10);
+  } finally {
+    restore();
+  }
+  assert.deepEqual(calls.incident, []);
+  assert.deepEqual(calls.single, [['a', false, true]]);
 });

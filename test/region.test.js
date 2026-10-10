@@ -53,3 +53,22 @@ test('identical endpoints within one source still get distinct ids and proxy nam
   const again = toRuntimeNodes([proxy({ name: 'A' }), proxy({ name: 'A' })], source);
   assert.deepEqual(again.map(item => item.id), nodes.map(item => item.id));
 });
+
+test('reordering entries that share endpoint and credentials never swaps their identities', () => {
+  const shared = { type: 'trojan', server: 's.example.com', port: 443, password: 'pw' };
+  const byOtherConfig = [{ ...shared, name: 'HK 01', sni: 'a.example' }, { ...shared, name: 'HK 02', sni: 'b.example' }];
+  const first = toRuntimeNodes(byOtherConfig, source);
+  const reordered = toRuntimeNodes([...byOtherConfig].reverse(), source);
+  assert.equal(first.find(n => n.name === 'HK 01').id, reordered.find(n => n.name === 'HK 01').id);
+  assert.equal(first.find(n => n.name === 'HK 02').id, reordered.find(n => n.name === 'HK 02').id);
+
+  const byName = [{ ...shared, name: 'X' }, { ...shared, name: 'Y' }];
+  const a = toRuntimeNodes(byName, source);
+  const b = toRuntimeNodes([...byName].reverse(), source);
+  assert.equal(a.find(n => n.name === 'X').id, b.find(n => n.name === 'X').id);
+  assert.notEqual(a[0].id, a[1].id);
+});
+
+test('a node that is unique in its source keeps the same id as a standalone node', () => {
+  assert.equal(toRuntimeNodes([proxy()], source)[0].id, toRuntimeNode(proxy(), source).id);
+});

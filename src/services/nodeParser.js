@@ -308,17 +308,20 @@ function stableHash(value, length = 12) {
   return crypto.createHash('sha256').update(value).digest('hex').slice(0, length);
 }
 
-// The id deliberately excludes the display name: airports rename nodes (flags, tags, traffic notes)
-// all the time, and a rename must not reset the node's history or alert state.
-// `seen` disambiguates entries that share the same endpoint and credentials within one source.
-function toRuntimeNode(proxy, source, seen) {
-  const normalized = normalizeClashProxy(proxy);
-  if (!normalized) return null;
-  const fingerprint = JSON.stringify({ sourceId: source.id, type: normalized.type, server: normalized.server,
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function baseFingerprint(normalized, source) {
+  return JSON.stringify({ sourceId: source.id, type: normalized.type, server: normalized.server,
     port: normalized.port, uuid: normalized.uuid, password: normalized.password });
-  const occurrence = seen ? (seen.get(fingerprint) || 0) : 0;
-  if (seen) seen.set(fingerprint, occurrence + 1);
-  const id = stableHash(occurrence > 0 ? `${fingerprint}#${occurrence}` : fingerprint);
+}
+
+function buildRuntimeNode(normalized, source, id) {
   const displayName = normalized.name;
   const proxyName = `${displayName} · ${id.slice(0, 6)}`;
   const { region, regionSource } = detectRegion(displayName);
@@ -330,9 +333,47 @@ function toRuntimeNode(proxy, source, seen) {
   };
 }
 
+// Node ids identify a node by source + protocol + endpoint + credentials and deliberately exclude the
+// display name: airports rename nodes (flags, tags, traffic notes) all the time, and a rename must not
+// reset the node's history or alert state.
+function toRuntimeNode(proxy, source) {
+  const normalized = normalizeClashProxy(proxy);
+  if (!normalized) return null;
+  return buildRuntimeNode(normalized, source, stableHash(baseFingerprint(normalized, source)));
+}
+
+// Same as toRuntimeNode for a whole source. When several entries share endpoint and credentials,
+// they are told apart by the rest of their configuration, then by name, and only entries that are
+// identical in every respect fall back to their position (so reordering can never swap two distinct
+// nodes' history; it can only swap entries that are indistinguishable anyway).
 function toRuntimeNodes(proxies, source) {
+  const entries = proxies.map(proxy => normalizeClashProxy(proxy)).filter(Boolean)
+    .map(normalized => ({ normalized, base: baseFingerprint(normalized, source) }));
+  const count = key => entries.reduce((map, entry) => map.set(entry[key], (map.get(entry[key]) || 0) + 1), new Map());
+  const baseCounts = count('base');
+  for (const entry of entries) {
+    const { name, ...rest } = entry.normalized;
+    entry.config = `${entry.base}|cfg:${stableHash(stableStringify(rest), 16)}`;
+    entry.named = `${entry.config}|name:${name}`;
+  }
+  const configCounts = count('config');
+  const namedCounts = count('named');
   const seen = new Map();
-  return proxies.map(proxy => toRuntimeNode(proxy, source, seen)).filter(Boolean);
+  return entries.map(entry => {
+    let key = entry.base;
+    if (baseCounts.get(entry.base) > 1) {
+      key = entry.config;
+      if (configCounts.get(entry.config) > 1) {
+        key = entry.named;
+        if (namedCounts.get(entry.named) > 1) {
+          const occurrence = seen.get(entry.named) || 0;
+          seen.set(entry.named, occurrence + 1);
+          key = `${entry.named}#${occurrence}`;
+        }
+      }
+    }
+    return buildRuntimeNode(entry.normalized, source, stableHash(key));
+  });
 }
 
 module.exports = { SUPPORTED_PROTOCOLS, decodeBase64, normalizeClashProxy, parseContent, parseUri, toRuntimeNode, toRuntimeNodes, detectRegion, flagToRegion };

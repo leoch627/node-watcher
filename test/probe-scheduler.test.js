@@ -28,7 +28,7 @@ test('the scheduler checks nodes through remote probes and keeps state per probe
     sendIncidentNotification: notificationService.sendIncidentNotification,
     ready: mihomoService.ready
   };
-  notificationService.sendNotification = async (n, status) => { sent.push([n.name, status.online, status.probeName]); return []; };
+  notificationService.sendNotification = async (n, status) => { sent.push([n.name, status.online, status.probeName]); return [{ service: 'telegram', success: true }]; };
   notificationService.sendIncidentNotification = async () => [];
   mihomoService.ready = false; // the local probe is unavailable; only the remote one can check
 
