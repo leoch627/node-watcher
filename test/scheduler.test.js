@@ -5,8 +5,10 @@ const { SchedulerService } = require('../src/services/scheduler');
 const subscriptionService = require('../src/services/subscription');
 const notificationService = require('../src/services/notification');
 const monitorService = require('../src/services/monitor');
-const mihomoService = require('../src/services/mihomo');
-const mediaService = require('../src/services/media');
+const { MonitorService } = require('../src/services/monitor');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const proxy = { name: 'Tokyo', type: 'vless', server: 'a.example.com', port: 443, uuid: '12345678-1234-1234-9234-123456789012' };
 const sample = id => ({ id, name: `Node ${id}`, protocol: 'vless', server: `${id}.example.com`, port: 443 });
@@ -133,42 +135,94 @@ test('when nearly every node fails at once only one incident message is sent and
   }
 });
 
-test('health checks are skipped, not recorded as failures, while the core is not ready', async () => {
-  const scheduler = new SchedulerService();
-  scheduler.nodes = [sample('a')];
-  const originalReady = mihomoService.ready;
-  mihomoService.ready = false;
-  const restore = stub(monitorService, { checkAll: async () => { throw new Error('must not probe'); } });
-  try {
-    const job = await scheduler.runHealthCheck();
-    assert.equal(job.status, 'skipped');
-    assert.equal(job.error, 'Mihomo is not ready');
-  } finally {
-    restore();
-    mihomoService.ready = originalReady;
-  }
+function fakeProbes(probes) {
+  const monitors = new Map(probes.map(probe => [probe.id, new MonitorService({
+    historyPath: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'nw-sched-')), 'history.json')
+  })]));
+  return {
+    monitors,
+    list: () => probes,
+    find: id => probes.find(probe => probe.id === id) || null,
+    monitorFor: id => monitors.get(id) || null,
+    defaultProbeId: () => probes[0].id,
+    syncNodes: nodes => monitors.forEach(monitor => monitor.syncNodes(nodes)),
+    describe: () => probes
+  };
+}
+
+test('health checks skip offline backends instead of recording failures', async () => {
+  const probes = fakeProbes([{ id: 'local', name: '本机', type: 'local', enabled: true, online: false }]);
+  const scheduler = new SchedulerService({ probes, run: async () => { throw new Error('must not run'); } });
+  scheduler.nodes = [{ ...sample('a'), proxy }];
+  probes.syncNodes(scheduler.nodes);
+  const job = await scheduler.runHealthCheck();
+  assert.equal(job.status, 'skipped');
+  assert.match(job.error, /不在线/);
+  assert.equal(probes.monitorFor('local').getNodeStatus('a').online, null);
 });
 
-test('media checks skip offline nodes and keep their earlier results', async () => {
-  const scheduler = new SchedulerService();
-  const nodes = [sample('up'), sample('down')].map(item => ({ ...item, proxyName: item.name }));
-  monitorService.syncNodes(nodes);
-  monitorService.updateNodeStatus(nodes[0], { online: true, responseTime: 10, lastCheck: 'now' });
-  monitorService.updateNodeStatus(nodes[1], { online: false, responseTime: null, lastCheck: 'now' });
-  const checked = [];
-  const restore = stub(mediaService, {
-    checkNode: async (node, slot) => { checked.push([node.id, slot]); return { checkedAt: 't', exit: { ip: '1.1.1.1', region: 'JP' }, services: {} }; }
-  });
-  try {
-    const job = { status: 'running', total: 2, completed: 0, errors: 0, skipped: 0 };
-    await scheduler.executeMediaJob(job, nodes);
-    assert.equal(job.status, 'completed');
-    assert.equal(job.skipped, 1);
-    assert.equal(job.completed, 2);
-    assert.deepEqual(checked, [['up', 0]]);
-  } finally {
-    restore();
-  }
+test('health checks record miaospeed HTTP latency per backend and treat 0 ms as offline', async () => {
+  const probes = fakeProbes([
+    { id: 'local', name: '本机', type: 'local', enabled: true, online: true },
+    { id: 'm-1', name: '家里', type: 'reverse', enabled: true, online: true },
+    { id: 'm-2', name: '停用', type: 'forward', enabled: false, online: true }
+  ]);
+  const calls = [];
+  const run = async (backendId, nodes, { matrices, configs, onResult }) => {
+    calls.push([backendId, matrices, configs.taskTimeout]);
+    nodes.forEach(node => onResult(node.id, { http: node.id === 'b' ? 0 : 150, rtt: node.id === 'b' ? 0 : 40 }));
+    return { version: 'x', results: new Map() };
+  };
+  const scheduler = new SchedulerService({ probes, run });
+  scheduler.dispatchAlerts = async () => {};
+  scheduler.nodes = ['a', 'b'].map(id => ({ ...sample(id), proxy }));
+  probes.syncNodes(scheduler.nodes);
+  const job = await scheduler.runHealthCheck();
+  assert.equal(job.status, 'completed');
+  assert.deepEqual(calls.map(call => call[0]).sort(), ['local', 'm-1']);
+  assert.deepEqual(calls[0][1], ['TEST_PING_CONN', 'TEST_PING_RTT']);
+  assert.ok(calls[0][2] <= 10000);
+  const home = probes.monitorFor('m-1');
+  assert.equal(home.getNodeStatus('a').online, true);
+  assert.equal(home.getNodeStatus('a').responseTime, 150);
+  assert.equal(home.getNodeStatus('a').rtt, 40);
+  assert.equal(home.getNodeStatus('b').online, false);
+  assert.equal(job.completed, 4);
+});
+
+test('unlock checks skip offline nodes, add regional scripts per region and classify results', async () => {
+  const probes = fakeProbes([{ id: 'local', name: '本机', type: 'local', enabled: true, online: true }]);
+  const requests = [];
+  const run = async (backendId, nodes, { matrices, scripts: sent, onResult }) => {
+    requests.push({ nodes: nodes.map(node => node.id), scripts: sent.map(item => item.id), matrices });
+    nodes.forEach(node => onResult(node.id, {
+      scripts: { netflix: { text: '解锁(hk)', background: '186,230,126' } },
+      outbound: { main: { ip: '9.9.9.9', countryCode: 'HK', asn: 1, org: 'Org' } }
+    }));
+    return { version: 'x', results: new Map() };
+  };
+  const scheduler = new SchedulerService({ probes, run });
+  const nodes = [{ ...sample('hk'), region: 'HK', proxy }, { ...sample('us'), region: 'US', proxy }, { ...sample('down'), region: 'HK', proxy }];
+  scheduler.nodes = nodes;
+  probes.syncNodes(nodes);
+  const monitor = probes.monitorFor('local');
+  monitor.updateNodeStatus(nodes[0], { online: true });
+  monitor.updateNodeStatus(nodes[1], { online: true });
+  monitor.updateNodeStatus(nodes[2], { online: false });
+  const job = { status: 'running', total: 3, completed: 0, errors: 0, skipped: 0 };
+  await scheduler.executeMediaJob(job, 'local', nodes);
+  assert.equal(job.status, 'completed');
+  assert.equal(job.skipped, 1);
+  assert.equal(job.completed, 3);
+  assert.equal(requests.length, 2, 'one request per region group');
+  assert.ok(requests.every(request => request.scripts.includes('netflix')));
+  const hkScripts = requests.find(request => request.nodes.includes('hk')).scripts;
+  const expected = require('../src/miaospeed/scripts').regional('HK', scheduler.unlockSettings().scripts);
+  assert.ok(expected.length > 0 && expected.every(id => hkScripts.includes(id)), 'HK nodes get the HK regional scripts');
+  assert.ok(requests.flatMap(request => request.nodes).every(id => id !== 'down'));
+  assert.ok(requests[0].matrices.some(matrix => matrix === 'GEOIP_OUTBOUND'));
+  const media = monitor.getNodeStatus('hk').media;
+  assert.deepEqual([media.services.netflix.status, media.services.netflix.region, media.exit.region], ['unlocked', 'HK', 'HK']);
 });
 
 test('alerts that no channel delivered stay pending and are retried', async () => {

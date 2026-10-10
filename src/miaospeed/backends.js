@@ -19,7 +19,8 @@ const HELLO_TIMEOUT_MS = 10000;
 const SESSION_IDLE_MS = 120000;
 const ACQUIRE_TIMEOUT_MS = 60000;
 const NONCE_TTL_MS = 15 * 60 * 1000;
-const REVERSE_POOL = 2;
+// Links each reverse backend keeps open: health checks, deep tests and unlock checks can overlap.
+const REVERSE_POOL = 3;
 const FORWARD_CHECK_MS = 120000;
 
 const cleanName = value => String(value || '').trim().slice(0, 40);
@@ -177,7 +178,10 @@ class BackendManager extends EventEmitter {
     } catch (error) {
       Object.assign(state, { online: false, error: error.message });
     }
+    const previous = this.forwardState.get(record.id)?.online;
     this.forwardState.set(record.id, { ...this.forwardState.get(record.id), ...state });
+    if (previous === true && state.online === false) this.emit('disconnect', { id: record.id, name: record.name });
+    if (previous === false && state.online === true) this.emit('connect', { id: record.id, name: record.name });
     return state;
   }
 

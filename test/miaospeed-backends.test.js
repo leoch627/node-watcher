@@ -56,12 +56,13 @@ function fakeMiaospeed(url, token, { nonce = `n-${Math.random()}`, timestamp = M
   return { ws, ready, seen };
 }
 
-test('reverse backends complete the msr-v1 handshake and run signed tasks', async () => {
+test('reverse backends complete the msr-v1 handshake and run signed tasks', async t => {
   const { manager, base, close } = await setup();
   const record = manager.create({ name: 'pi', type: 'reverse' });
   const fake = fakeMiaospeed(`${base}/miaospeed/reverse/${record.id}`, record.token);
+  t.after(async () => { fake.ws.terminate(); await close(); });
   const ack = await fake.ready;
-  assert.equal(ack.Pool, 2);
+  assert.equal(ack.Pool, 3);
   assert.equal(manager.get(record.id).online, true);
 
   const nodes = [
@@ -76,8 +77,6 @@ test('reverse backends complete the msr-v1 handshake and run signed tasks', asyn
   assert.equal(outcome.version, 'fake-1');
   // The proxy is renamed to the node id so results can be mapped back.
   assert.match(fake.seen[0].Nodes[0].Payload, /^name: aaa$/m);
-  fake.ws.close();
-  await close();
 });
 
 test('reverse links with a wrong token or a replayed nonce are rejected', async () => {

@@ -2,17 +2,21 @@ const crypto = require('crypto');
 const subscriptionService = require('./subscription');
 const monitorService = require('./monitor');
 const notificationService = require('./notification');
-const mihomoService = require('./mihomo');
-const mediaService = require('./media');
 const nodeParser = require('./nodeParser');
 const config = require('../utils/config');
-const registry = require('../probe/registry');
+const registry = require('./probes');
+const backends = require('../miaospeed/backends');
+const scripts = require('../miaospeed/scripts');
+const { runForNodes } = require('../miaospeed/tasks');
+const { MATRIX } = require('../miaospeed/protocol');
 const logger = require('../utils/logger');
 
 const MAX_INDIVIDUAL_ALERTS = 3;
 const INCIDENT_MIN_NODES = 5;
 const INCIDENT_FAIL_RATIO = 0.8;
 const INCIDENT_CLEAR_RATIO = 0.5;
+// miaospeed accepts per-request timeouts up to 10 s.
+const MAX_TASK_TIMEOUT_MS = 10000;
 
 // True when at least one notification channel reported a successful delivery.
 const delivered = outcome => Array.isArray(outcome) && outcome.some(item => item && item.success === true);
@@ -23,7 +27,10 @@ const clamp = (value, min, max, fallback) => {
 };
 
 class SchedulerService {
-  constructor() {
+  constructor({ probes = registry, manager = backends, run = runForNodes } = {}) {
+    this.registry = probes;
+    this.backends = manager;
+    this.run = run;
     this.timer = null;
     this.refreshTimer = null;
     this.nodes = [];
@@ -43,6 +50,7 @@ class SchedulerService {
     } catch (error) {
       logger.error(`Initial node load failed: ${error.message}`);
     }
+    this.watchProbes(this.backends);
     this.startMonitoring();
     await this.runHealthCheck();
   }
@@ -122,9 +130,7 @@ class SchedulerService {
     }
     this.nodes = Array.from(unique.values());
     this.sourceStatus = allResults.map(item => item.status);
-    registry.syncNodes(this.nodes);
-    registry.hub?.broadcastNodes(this.nodes);
-    await mihomoService.updateProxies(this.nodes);
+    this.registry.syncNodes(this.nodes);
     logger.info(`Loaded ${this.nodes.length} nodes from ${allResults.length} sources`);
     return this.nodes;
   }
@@ -147,27 +153,28 @@ class SchedulerService {
 
   checkOptions() {
     const monitoring = config.getConfig().monitoring || {};
+    const retries = clamp(monitoring.retryAttempts, 0, 3, 0);
+    const timeout = Math.min(MAX_TASK_TIMEOUT_MS, Math.max(1000, Number(monitoring.timeoutSeconds || 10) * 1000));
     return {
-      options: {
-        retries: clamp(monitoring.retryAttempts, 0, 3, 0),
-        failureThreshold: clamp(monitoring.failureThreshold, 1, 10, 2),
-        url: monitoring.customHealthCheckUrl || undefined
+      options: { retries, failureThreshold: clamp(monitoring.failureThreshold, 1, 10, 2) },
+      // HTTP delay (connection + request through the proxy) decides online/offline; RTT is extra.
+      configs: {
+        pingAddress: monitoring.customHealthCheckUrl || undefined,
+        taskTimeout: timeout, taskRetry: retries + 1, pingAverageOver: 1
       },
-      timeout: Math.max(1000, Number(monitoring.timeoutSeconds || 10) * 1000),
-      concurrency: clamp(monitoring.concurrency, 1, 32, 8)
+      timeoutMs: Math.max(120000, Math.ceil(this.nodes.length / 32) * timeout * (retries + 2) + 60000)
     };
   }
 
-  // Alerts name the probe only when remote probes exist, so single-host messages stay unchanged.
+  // Alerts name the probe only when several probes exist, so single-host messages stay unchanged.
   probeLabel(id) {
-    if (registry.records().length === 0) return null;
-    if (registry.isLocal(id)) return { id, name: registry.localName };
-    const record = registry.find(id);
-    return record ? { id, name: record.name } : null;
+    if (this.registry.list().length < 2) return null;
+    const probe = this.registry.find(id);
+    return probe ? { id, name: probe.name } : null;
   }
 
-  // One round on every probe: the local Mihomo core (unless LOCAL_PROBE=false) and each connected
-  // remote probe, in parallel. `only` limits the round to the given probe ids.
+  // One round on every enabled probe (miaospeed backend), in parallel. `only` limits the round to
+  // the given probe ids. Probes that are offline are skipped, never recorded as node failures.
   async runHealthCheck({ reload = false, only = null } = {}) {
     if (this.healthJob?.status === 'running') return this.healthJob;
     const job = {
@@ -178,20 +185,15 @@ class SchedulerService {
     try {
       if (reload) await this.loadNodes();
       const settings = this.checkOptions();
-      const wanted = id => !only || only.includes(id);
-      const tasks = [];
-      if (registry.localEnabled && wanted('local')) tasks.push(this.runLocalCheck(job, settings));
-      for (const id of registry.hub?.connectedIds() || []) {
-        if (wanted(id)) tasks.push(this.runRemoteCheck(job, id, settings));
-      }
-      job.total = this.nodes.length * Math.max(1, tasks.length);
-      await Promise.all(tasks);
+      const probes = this.registry.list().filter(probe => probe.enabled && (!only || only.includes(probe.id)));
+      job.total = this.nodes.length * Math.max(1, probes.length);
+      await Promise.all(probes.map(probe => this.runProbeCheck(job, probe, settings)));
       if (job.probes.some(item => item.status === 'completed')) {
         job.status = 'completed';
       } else {
         // Nothing could probe: record nothing and alert on nothing.
         job.status = 'skipped';
-        job.error = job.probes.map(item => item.error).find(Boolean) || 'No probe is available';
+        job.error = job.probes.map(item => item.error).find(Boolean) || '没有可用的 miaospeed 后端';
         logger.warn(`Health check skipped: ${job.error}`);
       }
     } catch (error) {
@@ -208,92 +210,75 @@ class SchedulerService {
     job.completed = job.probes.reduce((sum, item) => sum + (item.completed || 0), 0);
   }
 
-  async runLocalCheck(job, { options, timeout, concurrency }) {
-    const entry = { id: 'local', name: registry.localName, status: 'running', completed: 0, total: this.nodes.length, error: null };
+  async runProbeCheck(job, probe, { options, configs, timeoutMs }) {
+    const monitor = this.registry.monitorFor(probe.id);
+    const entry = { id: probe.id, name: probe.name, status: 'running', completed: 0, total: this.nodes.length, error: null };
     job.probes.push(entry);
-    if (!mihomoService.ready) {
+    if (!monitor || probe.online === false || (probe.type === 'reverse' && !probe.online)) {
       entry.status = 'skipped';
-      entry.error = 'Mihomo is not ready';
+      entry.error = `后端 ${probe.name} 不在线`;
       return;
     }
+    const nodes = this.nodes;
+    const byId = new Map(nodes.map(node => [node.id, node]));
+    const applied = [];
     try {
-      const results = await monitorService.checkAll(this.nodes, timeout, concurrency,
-        completed => { entry.completed = completed; this.progress(job); }, options);
-      await this.dispatchAlerts(results.filter(Boolean), this.nodes.length, { probe: this.probeLabel('local') });
+      await this.run(probe.id, nodes, {
+        matrices: [MATRIX.HTTP, MATRIX.RTT], configs, timeoutMs, manager: this.backends,
+        onResult: (nodeId, result) => {
+          const node = byId.get(nodeId);
+          if (!node) return;
+          const online = Number(result.http) > 0;
+          const status = monitor.applyProbeResult(node, {
+            online, latency: online ? result.http : null, rtt: result.rtt > 0 ? result.rtt : null,
+            error: online ? null : '连接超时或失败'
+          }, { ...options, checkMethod: 'miaospeed' });
+          if (status) applied.push(status);
+          entry.completed += 1;
+          this.progress(job);
+        }
+      });
+      await this.dispatchAlerts(applied, nodes.length, { monitor, probe: this.probeLabel(probe.id) });
       entry.status = 'completed';
     } catch (error) {
-      entry.status = 'failed';
+      entry.status = applied.length ? 'completed' : 'failed';
       entry.error = error.message;
-      logger.error(`Local health check failed: ${error.message}`);
+      logger.warn(`Health check on ${probe.name} failed: ${error.message}`);
+      if (applied.length) await this.dispatchAlerts(applied, nodes.length, { monitor, probe: this.probeLabel(probe.id) });
     }
   }
 
-  async runRemoteCheck(job, id, { options, timeout, concurrency }) {
-    const record = registry.find(id);
-    const monitor = registry.monitorFor(id);
-    const entry = { id, name: record?.name || id, status: 'running', completed: 0, total: this.nodes.length, error: null };
-    job.probes.push(entry);
-    if (!record || !monitor) {
-      entry.status = 'skipped';
-      entry.error = 'Unknown probe';
-      return;
-    }
-    try {
-      const outcome = await registry.hub.runCheck(id, { timeout, retries: options.retries, url: options.url, concurrency });
-      if (!outcome.mihomoReady) {
-        entry.status = 'skipped';
-        entry.error = outcome.error || 'Mihomo is not ready on the probe';
-        return;
-      }
-      const byId = new Map(this.nodes.map(node => [node.id, node]));
-      const applied = [];
-      for (const result of outcome.results || []) {
-        const node = byId.get(result?.id);
-        if (!node) continue;
-        const status = monitor.applyProbeResult(node, result, { ...options, checkMethod: 'probe' });
-        if (status) applied.push(status);
-      }
-      entry.completed = this.nodes.length;
-      this.progress(job);
-      await this.dispatchAlerts(applied, this.nodes.length, { monitor, probe: this.probeLabel(id) });
-      entry.status = 'completed';
-    } catch (error) {
-      entry.status = 'failed';
-      entry.error = error.message;
-      logger.warn(`Health check on probe ${entry.name} failed: ${error.message}`);
-    }
-  }
-
-  // Probe connectivity alerts: a remote probe that stays disconnected for a while is reported once,
-  // and its return is reported if (and only if) the disconnect was.
-  watchProbes(hub) {
-    hub.on('connect', probe => {
+  // Probe connectivity alerts: a backend that stays unreachable for a while is reported once, and
+  // its return is reported if (and only if) the outage was.
+  watchProbes(emitter) {
+    if (this.watching === emitter) return;
+    this.watching = emitter;
+    emitter.on('connect', probe => {
       clearTimeout(this.probeDownTimers.get(probe.id));
       this.probeDownTimers.delete(probe.id);
       if (this.probeAlerted.delete(probe.id)) {
         notificationService.dispatchAlert({
           online: true, title: '探针已恢复', subject: `[Node Watcher] 探针已恢复 - ${probe.name}`,
-          message: `探针 ${probe.name} 已重新连接到主控。`
+          message: `探针（miaospeed 后端）${probe.name} 已重新连接。`
         }, `probe ${probe.name}`).catch(() => {});
       }
-      // Give the probe a moment to load the node list, then check it right away.
+      // Check the nodes from the returning probe right away.
       const timer = setTimeout(() => {
-        if (this.healthJob?.status !== 'running' && hub.connectedIds().includes(probe.id)) {
-          this.runHealthCheck({ only: [probe.id] }).catch(() => {});
-        }
-      }, 5000);
+        if (this.healthJob?.status !== 'running') this.runHealthCheck({ only: [probe.id] }).catch(() => {});
+      }, 3000);
       timer.unref?.();
     });
-    hub.on('disconnect', probe => {
+    emitter.on('disconnect', probe => {
       const minutes = Math.max(1, Number(config.getConfig().monitoring?.checkIntervalMinutes || 5));
       const grace = Math.max(3 * 60000, 2 * minutes * 60000);
       clearTimeout(this.probeDownTimers.get(probe.id));
       const timer = setTimeout(() => {
         this.probeDownTimers.delete(probe.id);
-        if (hub.connectedIds().includes(probe.id) || !registry.find(probe.id)) return;
+        const current = this.registry.find(probe.id);
+        if (!current || current.online || !current.enabled) return;
         notificationService.dispatchAlert({
           online: false, title: '探针离线', subject: `[Node Watcher] 探针离线 - ${probe.name}`,
-          message: `探针 ${probe.name} 已断开超过 ${Math.round(grace / 60000)} 分钟，期间不再从该网络检测节点。`
+          message: `探针（miaospeed 后端）${probe.name} 已断开超过 ${Math.round(grace / 60000)} 分钟，期间不再从该网络检测节点。`
         }, `probe ${probe.name}`).then(outcome => {
           // Only a delivered "offline" message earns a "recovered" message later.
           if (delivered(outcome)) this.probeAlerted.add(probe.id);
@@ -307,11 +292,10 @@ class SchedulerService {
   // Turns this cycle's alert events into notifications:
   //  - if (nearly) every node failed at once, send a single "monitor-side incident" message instead;
   //  - several events in one cycle are merged into one message;
-  //  - alert state is only committed after a notification was dispatched, so suppressed alerts are not lost.
-  // Turns this cycle's alert events into notifications. Alert state (offline alert sent, incident
-  // active) only changes once at least one channel actually delivered the message: channel failures
-  // are returned as { success: false } rather than thrown, and with every channel down (or none
-  // enabled yet) the event must stay pending so it is retried on the next cycle.
+  //  - alert state (offline alert sent, incident active) only changes once at least one channel
+  //    actually delivered the message: channel failures are returned as { success: false } rather
+  //    than thrown, and with every channel down (or none enabled yet) the event must stay pending so
+  //    it is retried on the next cycle.
   async dispatchAlerts(results, totalNodes, { monitor = monitorService, probe = null } = {}) {
     const key = probe?.id || 'local';
     const probeName = probe?.name || null;
@@ -346,13 +330,32 @@ class SchedulerService {
     }
   }
 
+  // --- unlock checks (miaospeed-scripts) -----------------------------------------------------
+
+  unlockSettings() {
+    const unlock = config.getConfig().unlock || {};
+    const chosen = Array.isArray(unlock.scripts) && unlock.scripts.length ? unlock.scripts : scripts.DEFAULT_SCRIPTS;
+    return { scripts: chosen.filter(id => scripts.meta(id)), regional: unlock.regional !== false };
+  }
+
+  // Groups nodes so that each miaospeed request carries the base scripts plus the region-specific
+  // ones for that group's region.
+  unlockGroups(nodes, settings) {
+    const groups = new Map();
+    for (const node of nodes) {
+      const extra = settings.regional ? scripts.regional(node.region, settings.scripts) : [];
+      const key = extra.join(',');
+      if (!groups.has(key)) groups.set(key, { ids: [...settings.scripts, ...extra], regional: extra, nodes: [] });
+      groups.get(key).nodes.push(node);
+    }
+    return [...groups.values()];
+  }
+
   startMediaCheck(nodeIds = [], probeId = null) {
     if (this.mediaJob?.status === 'running') return this.mediaJob;
-    const target = probeId || (registry.localEnabled ? 'local' : registry.hub?.connectedIds()[0] || 'local');
-    const remote = !registry.isLocal(target);
-    const selected = nodeIds.length > 0
-      ? this.nodes.filter(node => nodeIds.includes(node.id))
-      : this.nodes;
+    const target = probeId || this.registry.defaultProbeId();
+    const probe = this.registry.find(target);
+    const selected = nodeIds.length > 0 ? this.nodes.filter(node => nodeIds.includes(node.id)) : this.nodes;
     const job = {
       id: crypto.randomUUID(), type: 'media', status: 'running', total: selected.length,
       completed: 0, errors: 0, skipped: 0, currentNode: null, probeId: target,
@@ -365,86 +368,57 @@ class SchedulerService {
       job.finishedAt = new Date().toISOString();
       return job;
     };
-    if (remote) {
-      if (!registry.find(target)) return fail('Unknown probe');
-      if (!registry.hub?.connectedIds().includes(target)) return fail('Probe is not connected');
-      this.executeRemoteMediaJob(job, target, selected).catch(error => logger.error(`Media check crashed: ${error.message}`));
-      return job;
-    }
-    if (!registry.localEnabled) return fail('The local probe is disabled');
-    if (!mihomoService.ready) return fail('Mihomo is not ready');
-    this.executeMediaJob(job, selected).catch(error => logger.error(`Media check crashed: ${error.message}`));
+    if (!probe) return fail('Unknown probe');
+    if (!probe.enabled || !probe.online) return fail(`后端 ${probe.name} 不在线`);
+    this.executeMediaJob(job, target, selected).catch(error => logger.error(`Media check crashed: ${error.message}`));
     return job;
   }
 
-  async executeRemoteMediaJob(job, probeId, nodes) {
-    const monitor = registry.monitorFor(probeId);
-    const names = new Map(nodes.map(node => [node.id, node.name]));
+  async executeMediaJob(job, probeId, nodes) {
+    const monitor = this.registry.monitorFor(probeId);
     // Offline nodes cannot produce meaningful results; keep whatever we had before.
     const runnable = nodes.filter(node => monitor.getNodeStatus(node)?.online !== false);
     job.skipped = nodes.length - runnable.length;
     job.completed = job.skipped;
+    const names = new Map(runnable.map(node => [node.id, node.name]));
+    const settings = this.unlockSettings();
     try {
-      if (runnable.length > 0) {
-        const outcome = await registry.hub.runMedia(probeId, runnable.map(node => node.id), (nodeId, media) => {
-          if (!names.has(nodeId)) return;
-          monitor.setMediaResult(nodeId, media);
-          job.currentNode = names.get(nodeId);
-          job.completed += 1;
+      for (const group of this.unlockGroups(runnable, settings)) {
+        await this.run(probeId, group.nodes, {
+          matrices: [...group.ids.map(id => ({ type: MATRIX.SCRIPT, params: id })), MATRIX.GEO_OUT],
+          scripts: scripts.forRequest(group.ids), configs: { taskTimeout: MAX_TASK_TIMEOUT_MS, taskRetry: 2 },
+          manager: this.backends, timeoutMs: Math.max(180000, group.nodes.length * 30000),
+          onResult: (nodeId, result) => {
+            monitor.setMediaResult(nodeId, this.toMedia(result, group.regional));
+            job.currentNode = names.get(nodeId) || null;
+            job.completed += 1;
+          }
         });
-        job.errors = Number(outcome?.errors) || 0;
-        if (outcome?.error) throw new Error(outcome.error);
       }
       job.status = 'completed';
     } catch (error) {
       job.status = 'failed';
       job.error = error.message;
-      logger.error(`Media check on probe ${probeId} failed: ${error.message}`);
+      job.errors += 1;
+      logger.error(`Media check on ${probeId} failed: ${error.message}`);
     } finally {
       job.currentNode = null;
       job.finishedAt = new Date().toISOString();
     }
   }
 
-  async executeMediaJob(job, nodes) {
-    const slots = Math.max(1, Math.min(mihomoService.mediaSlots, nodes.length));
-    let cursor = 0;
-    const worker = async slot => {
-      while (cursor < nodes.length) {
-        const node = nodes[cursor];
-        cursor += 1;
-        // An offline node cannot produce meaningful results; keep whatever we had before.
-        if (monitorService.getNodeStatus(node)?.online === false) {
-          job.skipped += 1;
-          job.completed += 1;
-          continue;
-        }
-        job.currentNode = node.name;
-        try {
-          const media = await mediaService.checkNode(node, slot);
-          monitorService.setMediaResult(node.id, media);
-        } catch (error) {
-          job.errors += 1;
-          const failed = { status: 'error', detail: error.message, region: null };
-          monitorService.setMediaResult(node.id, {
-            checkedAt: new Date().toISOString(), exit: { ip: null, region: null },
-            services: Object.fromEntries(mediaService.SERVICE_KEYS.map(key => [key, failed]))
-          });
-        }
-        job.completed += 1;
-      }
-    };
-    try {
-      await Promise.all(Array.from({ length: slots }, (_, slot) => worker(slot)));
-      job.status = 'completed';
-    } catch (error) {
-      job.status = 'failed';
-      job.error = error.message;
-      logger.error(`Media check failed: ${error.message}`);
-    } finally {
-      job.currentNode = null;
-      job.finishedAt = new Date().toISOString();
+  toMedia(result, regional = []) {
+    const services = {};
+    for (const [id, value] of Object.entries(result.scripts || {})) {
+      const meta = scripts.meta(id);
+      services[id] = { ...scripts.classify(value), label: meta?.name || id, elapsedMs: value.elapsedMs ?? null, regional: regional.includes(id) };
     }
+    const exit = result.outbound?.main;
+    return {
+      checkedAt: new Date().toISOString(),
+      exit: exit ? { ip: exit.ip, region: exit.countryCode || null, asn: exit.asn || null, org: exit.org || '' } : { ip: null, region: null },
+      services
+    };
   }
 
   stopMonitoring() {
@@ -457,6 +431,7 @@ class SchedulerService {
   async reloadSubscriptions() { return this.loadNodes(); }
 
   getStatus() {
+    const probes = this.registry.describe();
     return {
       isRunning: Boolean(this.timer), totalNodes: this.nodes.length,
       onlineNodes: monitorService.getOnlineNodes().length,
@@ -464,9 +439,9 @@ class SchedulerService {
       pendingNodes: monitorService.getPendingNodes().length,
       sourceStatus: this.sourceStatus,
       jobs: { health: this.healthJob, media: this.mediaJob },
-      mihomoReady: mihomoService.ready,
-      mihomo: mihomoService.getStatus(),
-      probes: registry.describe()
+      engineReady: probes.some(probe => probe.enabled && probe.online),
+      unlock: { ...this.unlockSettings(), columns: this.unlockSettings().scripts.map(id => ({ id, label: scripts.meta(id)?.name || id })) },
+      probes
     };
   }
 }

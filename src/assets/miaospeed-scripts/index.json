@@ -1,0 +1,2457 @@
+[
+  {
+    "id": "netflix",
+    "name": "Netflix",
+    "description": "检测 Netflix 可用性",
+    "category": "media",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 1,
+    "path": "media/global/netflix.js"
+  },
+  {
+    "id": "netflix-cdn",
+    "name": "Netflix CDN",
+    "description": "检测 Netflix CDN 地理位置",
+    "category": "media",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 2,
+    "path": "media/global/netflix-cdn.js"
+  },
+  {
+    "id": "ipquality",
+    "name": "IP质量(v4)",
+    "description": "检测出口节点的 IPv4 地址、运营商、位置与线路质量",
+    "category": "network",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "ip",
+      "quality",
+      "tool"
+    ],
+    "priority": 2,
+    "path": "network/ipquality.js"
+  },
+  {
+    "id": "disneyplus",
+    "name": "Disney+",
+    "description": "检测 Disney+ 解锁状态",
+    "category": "media",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 3,
+    "path": "media/global/disneyplus.js"
+  },
+  {
+    "id": "ipquality-v6",
+    "name": "IP质量(v6)",
+    "description": "检测出口节点的 IPv6 地址、运营商、位置与线路质量",
+    "category": "network",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "ip",
+      "quality",
+      "tool"
+    ],
+    "priority": 3,
+    "path": "network/ipquality-v6.js"
+  },
+  {
+    "id": "tiktok",
+    "name": "Tiktok",
+    "description": "检测 Tiktok 是否可用",
+    "category": "social",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "social"
+    ],
+    "priority": 3,
+    "path": "social/tiktok.js"
+  },
+  {
+    "id": "dazn",
+    "name": "Dazn",
+    "description": "检测 Dazn 在当前地区是否可用",
+    "category": "media",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 4,
+    "path": "media/global/dazn.js"
+  },
+  {
+    "id": "youtube",
+    "name": "YouTube",
+    "description": "检测 YouTube Premium 在当前地区是否可用",
+    "category": "media",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 4,
+    "path": "media/global/youtube.js"
+  },
+  {
+    "id": "primevideo",
+    "name": "Amazon Prime Video",
+    "description": "检测 Amazon Prime Video 在当前地区是否可用",
+    "category": "media",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 5,
+    "path": "media/global/primevideo.js"
+  },
+  {
+    "id": "ipforwall",
+    "name": "回墙出口",
+    "description": "检测访问中国大陆服务时使用的出口 IP",
+    "category": "network",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "ip",
+      "tool"
+    ],
+    "priority": 5,
+    "path": "network/ipforwall.js"
+  },
+  {
+    "id": "chatgpt",
+    "name": "ChatGPT",
+    "description": "检测 ChatGPT 在当前地区是否可用",
+    "category": "ai",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "ai"
+    ],
+    "priority": 6,
+    "path": "ai/chatgpt.js"
+  },
+  {
+    "id": "bing",
+    "name": "Bing",
+    "description": "检测 Bing 是否为国际版",
+    "category": "search",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "search-engine",
+      "ai"
+    ],
+    "priority": 6,
+    "path": "search/bing.js"
+  },
+  {
+    "id": "claude",
+    "name": "Claude",
+    "description": "检测 Anthropic Claude 在当前地区是否可用",
+    "category": "ai",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "ai"
+    ],
+    "priority": 7,
+    "path": "ai/claude.js"
+  },
+  {
+    "id": "copilot",
+    "name": "Microsoft Copilot",
+    "description": "检测 Microsoft Copilot 在当前地区是否可用",
+    "category": "ai",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "ai"
+    ],
+    "priority": 8,
+    "path": "ai/copilot.js"
+  },
+  {
+    "id": "coze",
+    "name": "Coze",
+    "description": "检测字节跳动 Coze (coze.com) 在当前地区是否可用",
+    "category": "ai",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "ai"
+    ],
+    "priority": 8,
+    "path": "ai/coze.js"
+  },
+  {
+    "id": "deepseek",
+    "name": "DeepSeek",
+    "description": "检测 DeepSeek (chat.deepseek.com) 在当前地区是否可用",
+    "category": "ai",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "ai"
+    ],
+    "priority": 8,
+    "path": "ai/deepseek.js"
+  },
+  {
+    "id": "gemini",
+    "name": "Google Gemini",
+    "description": "检测 Google Gemini 在当前地区是否可用",
+    "category": "ai",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "ai"
+    ],
+    "priority": 8,
+    "path": "ai/gemini.js"
+  },
+  {
+    "id": "grok",
+    "name": "Grok",
+    "description": "检测 xAI Grok 在当前地区是否可用",
+    "category": "ai",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "ai"
+    ],
+    "priority": 8,
+    "path": "ai/grok.js"
+  },
+  {
+    "id": "kimi",
+    "name": "Kimi",
+    "description": "检测月之暗面 Kimi (kimi.com) 在当前地区是否可用",
+    "category": "ai",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "ai"
+    ],
+    "priority": 8,
+    "path": "ai/kimi.js"
+  },
+  {
+    "id": "mistral",
+    "name": "Mistral AI",
+    "description": "检测 Mistral AI 在当前地区是否可用",
+    "category": "ai",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "ai"
+    ],
+    "priority": 8,
+    "path": "ai/mistral.js"
+  },
+  {
+    "id": "perplexity",
+    "name": "Perplexity",
+    "description": "检测 Perplexity AI 在当前地区是否可用",
+    "category": "ai",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "ai"
+    ],
+    "priority": 8,
+    "path": "ai/perplexity.js"
+  },
+  {
+    "id": "poe",
+    "name": "Poe",
+    "description": "检测 Quora Poe 在当前地区是否可用",
+    "category": "ai",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "ai"
+    ],
+    "priority": 8,
+    "path": "ai/poe.js"
+  },
+  {
+    "id": "tvbanywhere",
+    "name": "TVB Anywhere",
+    "description": "检测 TVB Anywhere 解锁状态",
+    "category": "media",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 8,
+    "path": "media/global/tvbanywhere.js"
+  },
+  {
+    "id": "viu",
+    "name": "Viu+",
+    "description": "检测 Viu+ 解锁状态",
+    "category": "media",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 8,
+    "path": "media/global/viu.js"
+  },
+  {
+    "id": "metaai",
+    "name": "Meta.AI",
+    "description": "检测 Meta AI 在当前地区是否可用",
+    "category": "ai",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "ai"
+    ],
+    "priority": 9,
+    "path": "ai/metaai.js"
+  },
+  {
+    "id": "instagramaudio",
+    "name": "Instagram Audio",
+    "description": "检测 Instagram Licensed Audio 是否可用",
+    "category": "media",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "stream",
+      "music"
+    ],
+    "priority": 9,
+    "path": "media/global/instagramaudio.js"
+  },
+  {
+    "id": "spotify",
+    "name": "Spotify",
+    "description": "检测 Spotify 在当前地区是否可用",
+    "category": "media",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "stream",
+      "music"
+    ],
+    "priority": 9,
+    "path": "media/global/spotify.js"
+  },
+  {
+    "id": "iqiyi",
+    "name": "爱奇艺国际版",
+    "description": "检测 iQiyi Global 在当前地区是否可用",
+    "category": "media",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 10,
+    "path": "media/global/iqiyi.js"
+  },
+  {
+    "id": "reddit",
+    "name": "Reddit",
+    "description": "检测 Reddit 是否可匿名浏览",
+    "category": "social",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "social"
+    ],
+    "priority": 11,
+    "path": "social/reddit.js"
+  },
+  {
+    "id": "steam",
+    "name": "Steam 货币",
+    "description": "检测 Steam 货币",
+    "category": "games",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "game"
+    ],
+    "priority": 12,
+    "path": "games/steam.js"
+  },
+  {
+    "id": "wikipedia",
+    "name": "Wikipedia 编辑权限",
+    "description": "检测 Wikipedia 编辑权限是否已解锁",
+    "category": "search",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "scholar"
+    ],
+    "priority": 12,
+    "path": "search/wikipedia.js"
+  },
+  {
+    "id": "hoytv",
+    "name": "香港開電視",
+    "description": "检测 HoyTV / 香港開電視 解锁状态",
+    "category": "media",
+    "regions": [
+      "hk"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 20,
+    "path": "media/hk/hoytv.js"
+  },
+  {
+    "id": "mytvsuper",
+    "name": "TVB",
+    "description": "检测 TVB 本地内容 解锁状态",
+    "category": "media",
+    "regions": [
+      "hk"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 20,
+    "path": "media/hk/mytvsuper.js"
+  },
+  {
+    "id": "nowe",
+    "name": "Now E",
+    "description": "检测 Now E 解锁状态",
+    "category": "media",
+    "regions": [
+      "hk"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 20,
+    "path": "media/hk/nowe.js"
+  },
+  {
+    "id": "viutv",
+    "name": "ViuTV",
+    "description": "检测 ViuTV 本地内容 解锁状态",
+    "category": "media",
+    "regions": [
+      "hk"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 20,
+    "path": "media/hk/viutv.js"
+  },
+  {
+    "id": "bilibilimainland",
+    "name": "哔哩哔哩大陆",
+    "description": "检测大陆限定内容 (api.bilibili.com) 是否可播放，适用于回国/中转节点场景",
+    "category": "media",
+    "regions": [
+      "cn"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 30,
+    "path": "media/cn/bilibilimainland.js"
+  },
+  {
+    "id": "bilibili",
+    "name": "哔哩国际",
+    "description": "检测 Bilibili 国际版 解锁状态",
+    "category": "media",
+    "regions": [
+      "tw",
+      "hk"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "anime"
+    ],
+    "priority": 30,
+    "path": "media/tw/bilibili.js"
+  },
+  {
+    "id": "bahamut",
+    "name": "動畫瘋",
+    "description": "检测 Bahamut / 動畫瘋 解锁状态",
+    "category": "media",
+    "regions": [
+      "tw"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "anime"
+    ],
+    "priority": 31,
+    "path": "media/tw/bahamut.js"
+  },
+  {
+    "id": "myvideo",
+    "name": "MyVideo",
+    "description": "检测 MyVideo 线上影音 解锁状态",
+    "category": "media",
+    "regions": [
+      "tw"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "movie",
+      "anime"
+    ],
+    "priority": 32,
+    "path": "media/tw/myvideo.js"
+  },
+  {
+    "id": "fridayvideo",
+    "name": "friDay 影音",
+    "description": "检测 friDay 影音 (video.friday.tw) 解锁状态",
+    "category": "media",
+    "regions": [
+      "tw"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 33,
+    "path": "media/tw/fridayvideo.js"
+  },
+  {
+    "id": "hamivideo",
+    "name": "Hami Video",
+    "description": "检测 Hami Video 解锁状态",
+    "category": "media",
+    "regions": [
+      "tw"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 33,
+    "path": "media/tw/hamivideo.js"
+  },
+  {
+    "id": "hbogoasia",
+    "name": "HBO Go Asia",
+    "description": "检测 HBO Go Asia 解锁状态",
+    "category": "media",
+    "regions": [
+      "tw",
+      "hk"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "movie",
+      "anime"
+    ],
+    "priority": 33,
+    "path": "media/tw/hbogoasia.js"
+  },
+  {
+    "id": "ofiii",
+    "name": "Ofiii",
+    "description": "检测 Ofiii(原 CATCHPLAY 旗下线上影音) 解锁状态",
+    "category": "media",
+    "regions": [
+      "tw"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 33,
+    "path": "media/tw/ofiii.js"
+  },
+  {
+    "id": "4gtv",
+    "name": "4GTV",
+    "description": "检测 4GTV 解锁状态",
+    "category": "media",
+    "regions": [
+      "tw"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 35,
+    "path": "media/tw/4gtv.js"
+  },
+  {
+    "id": "linetv",
+    "name": "Line TV",
+    "description": "检测 Line TV 解锁状态",
+    "category": "media",
+    "regions": [
+      "tw"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 35,
+    "path": "media/tw/linetv.js"
+  },
+  {
+    "id": "litv",
+    "name": "LiTV",
+    "description": "检测 LiTV 解锁状态",
+    "category": "media",
+    "regions": [
+      "tw"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 36,
+    "path": "media/tw/litv.js"
+  },
+  {
+    "id": "kktv",
+    "name": "KKTV",
+    "description": "检测 KKTV 解锁状态",
+    "category": "media",
+    "regions": [
+      "tw"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 37,
+    "path": "media/tw/kktv.js"
+  },
+  {
+    "id": "catchplay",
+    "name": "CatchPlay+",
+    "description": "检测 CatchPlay+ 解锁状态",
+    "category": "media",
+    "regions": [
+      "tw"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "movie"
+    ],
+    "priority": 39,
+    "path": "media/tw/catchplay.js"
+  },
+  {
+    "id": "hotstar",
+    "name": "Hotstar",
+    "description": "检测 Disney+ Hotstar 在当前地区是否可用",
+    "category": "media",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 40,
+    "path": "media/global/hotstar.js"
+  },
+  {
+    "id": "sonyliv",
+    "name": "SonyLIV",
+    "description": "检测 SonyLIV 在当前地区是否可用",
+    "category": "media",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 40,
+    "path": "media/global/sonyliv.js"
+  },
+  {
+    "id": "abema",
+    "name": "Abema",
+    "description": "检测 Abema TV 网络电视解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 40,
+    "path": "media/jp/abema.js"
+  },
+  {
+    "id": "crunchyroll",
+    "name": "Crunchyroll",
+    "description": "检测 Crunchyroll 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "anime"
+    ],
+    "priority": 40,
+    "path": "media/us/crunchyroll.js"
+  },
+  {
+    "id": "hbomax",
+    "name": "HBO Max",
+    "description": "检测 HBO Max(Max) 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 40,
+    "path": "media/us/hbomax.js"
+  },
+  {
+    "id": "danimestore",
+    "name": "dアニメストア",
+    "description": "检测 dアニメストア(d Anime Store) 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "anime"
+    ],
+    "priority": 41,
+    "path": "media/jp/danimestore.js"
+  },
+  {
+    "id": "dmm",
+    "name": "DMM TV",
+    "description": "检测 DMM TV 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "anime"
+    ],
+    "priority": 41,
+    "path": "media/jp/dmm.js"
+  },
+  {
+    "id": "fod",
+    "name": "FOD",
+    "description": "检测 FOD (Fuji TV On Demand) 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 41,
+    "path": "media/jp/fod.js"
+  },
+  {
+    "id": "hulujp",
+    "name": "Hulu Japan",
+    "description": "检测 Hulu 日本站 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 41,
+    "path": "media/jp/hulujp.js"
+  },
+  {
+    "id": "jcomondemand",
+    "name": "J:COM On Demand",
+    "description": "检测 J:COM オンデマンド 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 41,
+    "path": "media/jp/jcomondemand.js"
+  },
+  {
+    "id": "lemino",
+    "name": "Lemino",
+    "description": "检测 Lemino (原 docomo anime store) 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 41,
+    "path": "media/jp/lemino.js"
+  },
+  {
+    "id": "musicjp",
+    "name": "music.jp",
+    "description": "检测 music.jp 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "music"
+    ],
+    "priority": 41,
+    "path": "media/jp/musicjp.js"
+  },
+  {
+    "id": "nhkplus",
+    "name": "NHK+",
+    "description": "检测 NHK プラス 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 41,
+    "path": "media/jp/nhkplus.js"
+  },
+  {
+    "id": "niconico",
+    "name": "Niconico",
+    "description": "检测 Niconico 动画/直播 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "anime"
+    ],
+    "priority": 41,
+    "path": "media/jp/niconico.js"
+  },
+  {
+    "id": "paravi",
+    "name": "Paravi",
+    "description": "检测 Paravi 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 41,
+    "path": "media/jp/paravi.js"
+  },
+  {
+    "id": "radiko",
+    "name": "Radiko",
+    "description": "检测 Radiko 网络电台解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "radio"
+    ],
+    "priority": 41,
+    "path": "media/jp/radiko.js"
+  },
+  {
+    "id": "rakutentv-jp",
+    "name": "楽天TV",
+    "description": "检测 楽天TV(Rakuten TV) 日本站解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 41,
+    "path": "media/jp/rakutentv.js"
+  },
+  {
+    "id": "telasa",
+    "name": "Telasa",
+    "description": "检测 Telasa (KDDI) 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 41,
+    "path": "media/jp/telasa.js"
+  },
+  {
+    "id": "tver",
+    "name": "TVer",
+    "description": "检测 TVer 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 41,
+    "path": "media/jp/tver.js"
+  },
+  {
+    "id": "unext",
+    "name": "U-NEXT",
+    "description": "检测 U-NEXT 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 41,
+    "path": "media/jp/unext.js"
+  },
+  {
+    "id": "wowow",
+    "name": "Wowow",
+    "description": "检测 Wowow On Demand 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 41,
+    "path": "media/jp/wowow.js"
+  },
+  {
+    "id": "coupangplay",
+    "name": "Coupang Play",
+    "description": "检测 Coupang Play 解锁状态",
+    "category": "media",
+    "regions": [
+      "kr"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 41,
+    "path": "media/kr/coupangplay.js"
+  },
+  {
+    "id": "pandatv",
+    "name": "PandaTV",
+    "description": "检测 PandaTV(판다TV) 解锁状态",
+    "category": "media",
+    "regions": [
+      "kr"
+    ],
+    "tags": [
+      "stream",
+      "live"
+    ],
+    "priority": 41,
+    "path": "media/kr/pandatv.js"
+  },
+  {
+    "id": "soop",
+    "name": "SOOP",
+    "description": "检测 SOOP(原 AfreecaTV) 解锁状态",
+    "category": "media",
+    "regions": [
+      "kr"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 41,
+    "path": "media/kr/soop.js"
+  },
+  {
+    "id": "spotvnow",
+    "name": "SPOTV NOW",
+    "description": "检测 SPOTV NOW 解锁状态",
+    "category": "media",
+    "regions": [
+      "kr"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 41,
+    "path": "media/kr/spotvnow.js"
+  },
+  {
+    "id": "watcha",
+    "name": "Watcha",
+    "description": "检测 Watcha 解锁状态",
+    "category": "media",
+    "regions": [
+      "kr"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 41,
+    "path": "media/kr/watcha.js"
+  },
+  {
+    "id": "kancolle",
+    "name": "舰队Collection",
+    "description": "检测 舰队Collection(艦これ) 解锁状态",
+    "category": "games",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "game"
+    ],
+    "priority": 45,
+    "path": "games/kancolle.js"
+  },
+  {
+    "id": "konosubafd",
+    "name": "为美好的世界献上祝福 Fantastic Days",
+    "description": "检测 このすば ファンタスティックデイズ 日服解锁状态",
+    "category": "games",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "game"
+    ],
+    "priority": 45,
+    "path": "games/konosubafd.js"
+  },
+  {
+    "id": "mathsspot",
+    "name": "MathsSpot Roblox",
+    "description": "检测 Roblox MathsSpot 解锁状态",
+    "category": "games",
+    "regions": [
+      "eu"
+    ],
+    "tags": [
+      "game"
+    ],
+    "priority": 45,
+    "path": "games/mathsspot.js"
+  },
+  {
+    "id": "pcrjp",
+    "name": "公主连结Re:Dive",
+    "description": "检测 プリンセスコネクト!Re:Dive 日服解锁状态",
+    "category": "games",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "game"
+    ],
+    "priority": 45,
+    "path": "games/pcrjp.js"
+  },
+  {
+    "id": "pjsk",
+    "name": "世界计划 彩色舞台",
+    "description": "检测 プロジェクトセカイ カラフルステージ! 日服解锁状态",
+    "category": "games",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "game"
+    ],
+    "priority": 45,
+    "path": "games/pjsk.js"
+  },
+  {
+    "id": "prettyderby",
+    "name": "赛马娘",
+    "description": "检测 赛马娘(ウマ娘 プリティーダービー) 日服解锁状态",
+    "category": "games",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "game"
+    ],
+    "priority": 45,
+    "path": "games/prettyderby.js"
+  },
+  {
+    "id": "dstv",
+    "name": "DSTV",
+    "description": "检测 DSTV Now 解锁状态",
+    "category": "media",
+    "regions": [
+      "africa"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/africa/dstv.js"
+  },
+  {
+    "id": "showmax",
+    "name": "Showmax",
+    "description": "检测 Showmax 解锁状态",
+    "category": "media",
+    "regions": [
+      "africa"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/africa/showmax.js"
+  },
+  {
+    "id": "7plus",
+    "name": "7plus",
+    "description": "检测 7plus 解锁状态",
+    "category": "media",
+    "regions": [
+      "au"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/au/7plus.js"
+  },
+  {
+    "id": "abciview",
+    "name": "ABC iview",
+    "description": "检测 ABC iview 解锁状态",
+    "category": "media",
+    "regions": [
+      "au"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/au/abciview.js"
+  },
+  {
+    "id": "binge",
+    "name": "Binge",
+    "description": "检测 Binge 解锁状态",
+    "category": "media",
+    "regions": [
+      "au"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/au/binge.js"
+  },
+  {
+    "id": "channel10",
+    "name": "10 Play",
+    "description": "检测 10 Play (Channel 10) 解锁状态",
+    "category": "media",
+    "regions": [
+      "au"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/au/channel10.js"
+  },
+  {
+    "id": "channel9",
+    "name": "Channel 9",
+    "description": "检测 Channel 9(9Now) 解锁状态",
+    "category": "media",
+    "regions": [
+      "au"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/au/channel9.js"
+  },
+  {
+    "id": "docplay",
+    "name": "DocPlay",
+    "description": "检测 DocPlay 解锁状态",
+    "category": "media",
+    "regions": [
+      "au"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/au/docplay.js"
+  },
+  {
+    "id": "kayosports",
+    "name": "Kayo Sports",
+    "description": "检测 Kayo Sports 解锁状态",
+    "category": "media",
+    "regions": [
+      "au"
+    ],
+    "tags": [
+      "stream",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/au/kayosports.js"
+  },
+  {
+    "id": "sbsondemand",
+    "name": "SBS on Demand",
+    "description": "检测 SBS on Demand 解锁状态",
+    "category": "media",
+    "regions": [
+      "au"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/au/sbsondemand.js"
+  },
+  {
+    "id": "stan",
+    "name": "Stan",
+    "description": "检测 Stan 解锁状态",
+    "category": "media",
+    "regions": [
+      "au"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/au/stan.js"
+  },
+  {
+    "id": "cbcgem",
+    "name": "CBC Gem",
+    "description": "检测 CBC Gem 解锁状态",
+    "category": "media",
+    "regions": [
+      "ca"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/ca/cbcgem.js"
+  },
+  {
+    "id": "crave",
+    "name": "Crave",
+    "description": "检测 Crave 解锁状态",
+    "category": "media",
+    "regions": [
+      "ca"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/ca/crave.js"
+  },
+  {
+    "id": "skych",
+    "name": "Sky CH",
+    "description": "检测 Sky Switzerland 解锁状态",
+    "category": "media",
+    "regions": [
+      "ch"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/ch/skych.js"
+  },
+  {
+    "id": "joyn",
+    "name": "Joyn",
+    "description": "检测 Joyn 解锁状态",
+    "category": "media",
+    "regions": [
+      "de"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/de/joyn.js"
+  },
+  {
+    "id": "skyde",
+    "name": "Sky DE",
+    "description": "检测 Sky Deutschland 解锁状态",
+    "category": "media",
+    "regions": [
+      "de"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/de/skyde.js"
+  },
+  {
+    "id": "zdf",
+    "name": "ZDF",
+    "description": "检测 ZDF 解锁状态",
+    "category": "media",
+    "regions": [
+      "de"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/de/zdf.js"
+  },
+  {
+    "id": "movistarplus",
+    "name": "Movistar Plus+",
+    "description": "检测 Movistar Plus+ 解锁状态",
+    "category": "media",
+    "regions": [
+      "es"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/es/movistarplus.js"
+  },
+  {
+    "id": "eurosportro",
+    "name": "Eurosport 罗马尼亚",
+    "description": "检测 Eurosport 罗马尼亚站解锁状态",
+    "category": "media",
+    "regions": [
+      "eu"
+    ],
+    "tags": [
+      "stream",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/eu/eurosportro.js"
+  },
+  {
+    "id": "rakutentv-eu",
+    "name": "Rakuten TV 欧洲",
+    "description": "检测 Rakuten TV 欧洲站解锁状态",
+    "category": "media",
+    "regions": [
+      "eu"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/eu/rakutentv.js"
+  },
+  {
+    "id": "setantasports",
+    "name": "Setanta Sports",
+    "description": "检测 Setanta Sports 解锁状态",
+    "category": "media",
+    "regions": [
+      "eu"
+    ],
+    "tags": [
+      "stream",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/eu/setantasports.js"
+  },
+  {
+    "id": "skyshowtime",
+    "name": "SkyShowtime",
+    "description": "检测 SkyShowtime 解锁状态",
+    "category": "media",
+    "regions": [
+      "eu"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/eu/skyshowtime.js"
+  },
+  {
+    "id": "tntsports",
+    "name": "TNT Sports",
+    "description": "检测 TNT Sports 解锁状态",
+    "category": "media",
+    "regions": [
+      "eu"
+    ],
+    "tags": [
+      "stream",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/eu/tntsports.js"
+  },
+  {
+    "id": "viaplay",
+    "name": "Viaplay",
+    "description": "检测 Viaplay 解锁状态",
+    "category": "media",
+    "regions": [
+      "eu"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/eu/viaplay.js"
+  },
+  {
+    "id": "canalplus",
+    "name": "Canal+",
+    "description": "检测 Canal+ 解锁状态",
+    "category": "media",
+    "regions": [
+      "fr"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/fr/canalplus.js"
+  },
+  {
+    "id": "francetv",
+    "name": "France TV",
+    "description": "检测 France TV 解锁状态",
+    "category": "media",
+    "regions": [
+      "fr"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/fr/francetv.js"
+  },
+  {
+    "id": "molotov",
+    "name": "Molotov",
+    "description": "检测 Molotov 解锁状态",
+    "category": "media",
+    "regions": [
+      "fr"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/fr/molotov.js"
+  },
+  {
+    "id": "zee5",
+    "name": "Zee5",
+    "description": "检测 Zee5 在当前地区是否可用",
+    "category": "media",
+    "regions": [
+      "global"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/global/zee5.js"
+  },
+  {
+    "id": "jiocinema",
+    "name": "JioCinema",
+    "description": "检测 JioCinema 解锁状态",
+    "category": "media",
+    "regions": [
+      "in"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/in/jiocinema.js"
+  },
+  {
+    "id": "mxplayer",
+    "name": "MX Player",
+    "description": "检测 MX Player 解锁状态",
+    "category": "media",
+    "regions": [
+      "in"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/in/mxplayer.js"
+  },
+  {
+    "id": "tataplay",
+    "name": "Tata Play",
+    "description": "检测 Tata Play(Binge+) 解锁状态",
+    "category": "media",
+    "regions": [
+      "in"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/in/tataplay.js"
+  },
+  {
+    "id": "raiplay",
+    "name": "RaiPlay",
+    "description": "检测 RaiPlay 解锁状态",
+    "category": "media",
+    "regions": [
+      "it"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/it/raiplay.js"
+  },
+  {
+    "id": "animefesta",
+    "name": "AnimeFesta",
+    "description": "检测 AnimeFesta(アニメフェスタ) 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "anime"
+    ],
+    "priority": 45,
+    "path": "media/jp/animefesta.js"
+  },
+  {
+    "id": "erogamescape",
+    "name": "ErogameScape",
+    "description": "检测 ErogameScape(エロゲー批評空間) 年龄验证解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream"
+    ],
+    "priority": 45,
+    "path": "media/jp/erogamescape.js"
+  },
+  {
+    "id": "karaokedam",
+    "name": "Karaoke@DAM",
+    "description": "检测 Karaoke@DAM 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream",
+      "music"
+    ],
+    "priority": 45,
+    "path": "media/jp/karaokedam.js"
+  },
+  {
+    "id": "rakutenmagazine",
+    "name": "楽天マガジン",
+    "description": "检测 楽天マガジン(Rakuten Magazine) 解锁状态",
+    "category": "media",
+    "regions": [
+      "jp"
+    ],
+    "tags": [
+      "stream"
+    ],
+    "priority": 45,
+    "path": "media/jp/rakutenmagazine.js"
+  },
+  {
+    "id": "directvgo",
+    "name": "DirecTV GO",
+    "description": "检测 DirecTV GO(拉美) 解锁状态",
+    "category": "media",
+    "regions": [
+      "latam"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/latam/directvgo.js"
+  },
+  {
+    "id": "nlziet",
+    "name": "NLZIET",
+    "description": "检测 NLZIET 解锁状态",
+    "category": "media",
+    "regions": [
+      "nl"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/nl/nlziet.js"
+  },
+  {
+    "id": "npostartplus",
+    "name": "NPO Start Plus",
+    "description": "检测 NPO Start Plus 解锁状态",
+    "category": "media",
+    "regions": [
+      "nl"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/nl/npostartplus.js"
+  },
+  {
+    "id": "videoland",
+    "name": "Videoland",
+    "description": "检测 Videoland 解锁状态",
+    "category": "media",
+    "regions": [
+      "nl"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/nl/videoland.js"
+  },
+  {
+    "id": "maoritv",
+    "name": "Māori Television",
+    "description": "检测 Whakaata Māori(Māori Television) 解锁状态",
+    "category": "media",
+    "regions": [
+      "nz"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/nz/maoritv.js"
+  },
+  {
+    "id": "skygonz",
+    "name": "Sky Go NZ",
+    "description": "检测 Sky Go 新西兰站解锁状态",
+    "category": "media",
+    "regions": [
+      "nz"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/nz/skygonz.js"
+  },
+  {
+    "id": "threenow",
+    "name": "ThreeNow",
+    "description": "检测 ThreeNow 解锁状态",
+    "category": "media",
+    "regions": [
+      "nz"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/nz/threenow.js"
+  },
+  {
+    "id": "amediateka",
+    "name": "Amediateka",
+    "description": "检测 Amediateka 解锁状态",
+    "category": "media",
+    "regions": [
+      "ru"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/ru/amediateka.js"
+  },
+  {
+    "id": "mewatch",
+    "name": "meWATCH",
+    "description": "检测 meWATCH 解锁状态",
+    "category": "media",
+    "regions": [
+      "sg"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/sg/mewatch.js"
+  },
+  {
+    "id": "aisplay",
+    "name": "AIS Play",
+    "description": "检测 AIS Play 解锁状态",
+    "category": "media",
+    "regions": [
+      "th"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/th/aisplay.js"
+  },
+  {
+    "id": "trueid",
+    "name": "TrueID",
+    "description": "检测 TrueID TV 解锁状态",
+    "category": "media",
+    "regions": [
+      "th"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/th/trueid.js"
+  },
+  {
+    "id": "britbox-uk",
+    "name": "BritBox UK",
+    "description": "检测 BritBox 英国站解锁状态",
+    "category": "media",
+    "regions": [
+      "uk"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/uk/britbox.js"
+  },
+  {
+    "id": "channel4",
+    "name": "Channel 4",
+    "description": "检测 Channel 4 解锁状态",
+    "category": "media",
+    "regions": [
+      "uk"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/uk/channel4.js"
+  },
+  {
+    "id": "channel5",
+    "name": "Channel 5",
+    "description": "检测 Channel 5 解锁状态",
+    "category": "media",
+    "regions": [
+      "uk"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/uk/channel5.js"
+  },
+  {
+    "id": "discoveryplus-uk",
+    "name": "Discovery+ UK",
+    "description": "检测 Discovery+ 英国站解锁状态",
+    "category": "media",
+    "regions": [
+      "uk"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/uk/discoveryplus.js"
+  },
+  {
+    "id": "itvx",
+    "name": "ITVX",
+    "description": "检测 ITVX(ITV Hub) 解锁状态",
+    "category": "media",
+    "regions": [
+      "uk"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/uk/itvx.js"
+  },
+  {
+    "id": "skygo",
+    "name": "Sky Go",
+    "description": "检测 Sky Go 英国站解锁状态",
+    "category": "media",
+    "regions": [
+      "uk"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/uk/skygo.js"
+  },
+  {
+    "id": "acorntv",
+    "name": "Acorn TV",
+    "description": "检测 Acorn TV 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/us/acorntv.js"
+  },
+  {
+    "id": "amcplus",
+    "name": "AMC+",
+    "description": "检测 AMC+ 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/us/amcplus.js"
+  },
+  {
+    "id": "britbox-us",
+    "name": "BritBox",
+    "description": "检测 BritBox 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/us/britbox.js"
+  },
+  {
+    "id": "crackle",
+    "name": "Crackle",
+    "description": "检测 Crackle 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/us/crackle.js"
+  },
+  {
+    "id": "cwtv",
+    "name": "CW TV",
+    "description": "检测 The CW TV 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/us/cwtv.js"
+  },
+  {
+    "id": "directvstream",
+    "name": "DirecTV Stream",
+    "description": "检测 DirecTV Stream 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/us/directvstream.js"
+  },
+  {
+    "id": "discoveryplus-us",
+    "name": "Discovery+",
+    "description": "检测 Discovery+ 美国站解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/us/discoveryplus.js"
+  },
+  {
+    "id": "encoretvb",
+    "name": "encoreTVB",
+    "description": "检测 encoreTVB(北美/海外 TVB 平台) 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/us/encoretvb.js"
+  },
+  {
+    "id": "fox",
+    "name": "FOX",
+    "description": "检测 FOX 直播流解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/us/fox.js"
+  },
+  {
+    "id": "fubotv",
+    "name": "FuboTV",
+    "description": "检测 FuboTV 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/us/fubotv.js"
+  },
+  {
+    "id": "fxnow",
+    "name": "FX NOW",
+    "description": "检测 FX NOW 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/us/fxnow.js"
+  },
+  {
+    "id": "kocowa",
+    "name": "KOCOWA+",
+    "description": "检测 KOCOWA+ 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/us/kocowa.js"
+  },
+  {
+    "id": "nbatv",
+    "name": "NBA TV",
+    "description": "检测 NBA TV (nba.com/watch) 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/us/nbatv.js"
+  },
+  {
+    "id": "nflplus",
+    "name": "NFL+",
+    "description": "检测 NFL+ 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/us/nflplus.js"
+  },
+  {
+    "id": "paramountplus",
+    "name": "Paramount+",
+    "description": "检测 Paramount+ 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/us/paramountplus.js"
+  },
+  {
+    "id": "peacocktv",
+    "name": "Peacock TV",
+    "description": "检测 Peacock TV 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/us/peacocktv.js"
+  },
+  {
+    "id": "philo",
+    "name": "Philo",
+    "description": "检测 Philo 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/us/philo.js"
+  },
+  {
+    "id": "plutotv",
+    "name": "Pluto TV",
+    "description": "检测 Pluto TV 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/us/plutotv.js"
+  },
+  {
+    "id": "shudder",
+    "name": "Shudder",
+    "description": "检测 Shudder 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/us/shudder.js"
+  },
+  {
+    "id": "slingtv",
+    "name": "Sling TV",
+    "description": "检测 Sling TV 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 45,
+    "path": "media/us/slingtv.js"
+  },
+  {
+    "id": "starz",
+    "name": "Starz",
+    "description": "检测 Starz 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/us/starz.js"
+  },
+  {
+    "id": "tlcgo",
+    "name": "TLC GO",
+    "description": "检测 TLC GO 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/us/tlcgo.js"
+  },
+  {
+    "id": "tubitv",
+    "name": "Tubi TV",
+    "description": "检测 Tubi TV 解锁状态",
+    "category": "media",
+    "regions": [
+      "us"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/us/tubitv.js"
+  },
+  {
+    "id": "galaxyplay",
+    "name": "Galaxy Play",
+    "description": "检测 Galaxy Play 解锁状态",
+    "category": "media",
+    "regions": [
+      "vn"
+    ],
+    "tags": [
+      "stream",
+      "video"
+    ],
+    "priority": 45,
+    "path": "media/vn/galaxyplay.js"
+  },
+  {
+    "id": "kbs",
+    "name": "KBS",
+    "description": "检测 KBS 的解锁状态",
+    "category": "media",
+    "regions": [
+      "kr"
+    ],
+    "tags": [
+      "stream",
+      "ott"
+    ],
+    "priority": 50,
+    "path": "media/kr/kbs.js"
+  },
+  {
+    "id": "navertv",
+    "name": "Naver TV",
+    "description": "检测 Naver TV 的解锁状态",
+    "category": "media",
+    "regions": [
+      "kr"
+    ],
+    "tags": [
+      "stream",
+      "ott"
+    ],
+    "priority": 50,
+    "path": "media/kr/navertv.js"
+  },
+  {
+    "id": "tving",
+    "name": "Tving",
+    "description": "检测 Tving 的解锁状态",
+    "category": "media",
+    "regions": [
+      "kr"
+    ],
+    "tags": [
+      "stream",
+      "ott"
+    ],
+    "priority": 50,
+    "path": "media/kr/tving.js"
+  },
+  {
+    "id": "wavve",
+    "name": "Wavve",
+    "description": "检测 Wavve 的解锁状态",
+    "category": "media",
+    "regions": [
+      "kr"
+    ],
+    "tags": [
+      "stream",
+      "ott"
+    ],
+    "priority": 50,
+    "path": "media/kr/wavve.js"
+  },
+  {
+    "id": "bbciplayer",
+    "name": "BBC iPlayer",
+    "description": "检测 BBC iPlayer 解锁状态",
+    "category": "media",
+    "regions": [
+      "uk"
+    ],
+    "tags": [
+      "stream",
+      "video",
+      "live"
+    ],
+    "priority": 50,
+    "path": "media/uk/bbciplayer.js"
+  }
+]

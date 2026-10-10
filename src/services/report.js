@@ -1,27 +1,19 @@
-const sharp = require('sharp');
+// PNG matrix of the current node status on one probe: latency, unlock results (miaospeed-scripts,
+// coloured like the scripts colour them in Koipy) and the exit region.
+const svg = require('./render/svg');
+const scripts = require('../miaospeed/scripts');
+const {
+  ROW, MUTED, INK, cell, nameCell, latencyCell, header, verticals, rowLine, title, footer, nameWidth, toPng, formatTime
+} = require('./render/table');
 
-const SERVICES = [
-  ['netflix', 'Netflix'], ['disney', 'Disney+'], ['youtube', 'YouTube'],
-  ['primeVideo', 'Prime Video'], ['chatgpt', 'ChatGPT'], ['tiktok', 'TikTok'], ['hbo', 'HBO Max']
-];
-
-const STATE_LABEL = { unlocked: '可用', limited: '受限', blocked: '不可用', error: '错误' };
-
-const STATUS_STYLE = {
-  unlocked: ['#dcfce7', '#166534'], limited: ['#fef3c7', '#92400e'],
-  blocked: ['#fee2e2', '#991b1b'], error: ['#f1f5f9', '#64748b'],
-  pending: ['#f8fafc', '#94a3b8']
+const STATUS_FILL = {
+  unlocked: '#bae67e', limited: '#fd9a5c', blocked: '#ef6b73', na: '#d4d3d4', error: '#9ee3f1'
 };
 
-function escapeXml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, char => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;'
-  }[char]));
-}
-
-function shorten(value, length) {
-  const text = String(value || '');
-  return text.length > length ? `${text.slice(0, length - 1)}...` : text;
+function serviceCell(x, y, width, value) {
+  if (!value) return cell(x, y, width, '-', { color: MUTED });
+  const label = svg.truncate(value.text || value.status, width - 16, 14);
+  return cell(x, y, width, label, { fill: STATUS_FILL[value.status] || '#f3f4f6', color: INK, size: 14 });
 }
 
 function regionLabel(status) {
@@ -32,65 +24,60 @@ function regionLabel(status) {
   return claimed || actual;
 }
 
-function cell(x, y, width, text, fill = '#ffffff', color = '#334155', align = 'left') {
-  const textX = align === 'center' ? x + width / 2 : x + 12;
-  return `<rect x="${x}" y="${y}" width="${width}" height="44" fill="${fill}" stroke="#e2e8f0"/>
-    <text x="${textX}" y="${y + 28}" fill="${color}" font-size="13" text-anchor="${align === 'center' ? 'middle' : 'start'}">${escapeXml(text)}</text>`;
-}
-
 class ReportService {
-  async render(statuses, { probeName = null } = {}) {
-    const widths = [250, 160, 100, 90, 90, ...SERVICES.map(() => 120), 300];
-    const width = widths.reduce((sum, value) => sum + value, 0) + 48;
-    const height = 126 + Math.max(1, statuses.length) * 44 + 58;
-    const headers = ['节点', '来源', '协议', '延迟', '地区', ...SERVICES.map(([, label]) => label), '区域项目'];
-    let rows = '';
-    let x = 24;
-    headers.forEach((header, index) => {
-      rows += cell(x, 82, widths[index], header, '#0f172a', '#ffffff', index > 1 ? 'center' : 'left');
-      x += widths[index];
+  // columns: script ids to show (defaults to the configured unlock columns).
+  async render(statuses, { probeName = null, columns = scripts.DEFAULT_SCRIPTS, appVersion = '' } = {}) {
+    const services = columns.map(id => ({ id, label: scripts.meta(id)?.name || id }));
+    const regionalIds = [...new Set(statuses.flatMap(status => Object.entries(status.media?.services || {})
+      .filter(([id, value]) => value?.regional && !columns.includes(id)).map(([id]) => id)))];
+    const table = [
+      { key: 'index', label: '序号', width: 64 },
+      { key: 'name', label: '节点名称', width: nameWidth(statuses.map(status => status.node?.name || '')) },
+      { key: 'type', label: '类型', width: 130 },
+      { key: 'http', label: 'HTTP延迟', width: 110 },
+      { key: 'rtt', label: '延迟RTT', width: 110 },
+      ...services.map(service => ({ key: `s:${service.id}`, label: service.label, width: Math.max(120, Math.round(svg.textWidth(service.label, 16) + 32)) })),
+      ...(regionalIds.length ? [{ key: 'regional', label: '区域服务', width: 320 }] : []),
+      { key: 'region', label: '地区', width: 100 }
+    ];
+    const width = table.reduce((sum, column) => sum + column.width, 0);
+    const rows = statuses.length ? statuses : [];
+    let body = title(width, `Node Watcher 检测报告${probeName ? ` | ${probeName}` : ''}`) + header(table, 44, width);
+    let y = 44 + ROW;
+    rows.forEach((status, position) => {
+      let x = 0;
+      for (const column of table) {
+        const w = column.width;
+        if (column.key === 'index') body += cell(x, y, w, String(position + 1), { color: MUTED });
+        else if (column.key === 'name') body += nameCell(x, y, w, status.node?.name || '', { region: status.node?.region });
+        else if (column.key === 'type') body += cell(x, y, w, (status.node?.protocol || '-').toUpperCase());
+        else if (column.key === 'http') body += status.online === false ? cell(x, y, w, '离线', { color: '#b91c1c' }) : latencyCell(x, y, w, status.responseTime ?? null);
+        else if (column.key === 'rtt') body += latencyCell(x, y, w, status.online === false ? null : status.rtt ?? null);
+        else if (column.key === 'region') body += cell(x, y, w, regionLabel(status));
+        else if (column.key === 'regional') {
+          const text = Object.values(status.media?.services || {}).filter(value => value?.regional)
+            .map(value => `${value.label} ${value.text || value.status}`).join(' · ');
+          body += cell(x, y, w, svg.truncate(text || '-', w - 24, 14), { anchor: 'start', size: 14, color: text ? INK : MUTED });
+        } else body += serviceCell(x, y, w, status.media?.services?.[column.key.slice(2)]);
+        x += w;
+      }
+      body += rowLine(y + ROW, width);
+      y += ROW;
     });
-    const data = statuses.length ? statuses : [{ node: { name: '暂无检测结果', subscription: '-', protocol: '-' } }];
-    data.forEach((status, rowIndex) => {
-      const y = 126 + rowIndex * 44;
-      x = 24;
-      const baseFill = rowIndex % 2 ? '#f8fafc' : '#ffffff';
-      const values = [
-        shorten(status.node?.name, 28), shorten(status.node?.subscription, 18),
-        String(status.node?.protocol || '-').toUpperCase(),
-        status.online ? `${status.responseTime} ms` : status.online === false ? '离线' : '-',
-        regionLabel(status)
-      ];
-      values.forEach((value, index) => {
-        const color = index === 3 && status.online === false ? '#b91c1c' : '#334155';
-        rows += cell(x, y, widths[index], value, baseFill, color, index > 1 ? 'center' : 'left');
-        x += widths[index];
-      });
-      SERVICES.forEach(([key], serviceIndex) => {
-        const service = status.media?.services?.[key];
-        const state = service?.status || 'pending';
-        const [fill, color] = STATUS_STYLE[state] || STATUS_STYLE.pending;
-        const unlock = service?.unlockType === 'dns' ? ' DNS' : service?.unlockType === 'native' ? ' 原生' : '';
-        const label = state === 'unlocked' ? `${service.region || '可用'}${unlock}`
-          : state === 'limited' ? `受限${unlock}` : state === 'blocked' ? '不可用' : state === 'error' ? '错误' : '-';
-        rows += cell(x, y, widths[5 + serviceIndex], label, fill, color, 'center');
-        x += widths[5 + serviceIndex];
-      });
-      const regional = Object.values(status.media?.regional?.services || {})
-        .map(item => `${item.label} ${STATE_LABEL[item.status] || '-'}${item.unlockType === 'dns' ? '(DNS)' : ''}`).join(' · ');
-      rows += cell(x, y, widths[widths.length - 1], shorten(regional || '-', 36), baseFill, '#334155', 'left');
-    });
-    const checkedAt = new Date().toLocaleString('zh-CN', { hour12: false });
-    const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-      <rect width="100%" height="100%" fill="#ffffff"/>
-      <style>text { font-family: "Noto Sans CJK SC", "PingFang SC", Arial, sans-serif; letter-spacing: 0; }</style>
-      <text x="24" y="39" fill="#0f172a" font-size="24" font-weight="700">Node Watcher 检测报告</text>
-      <text x="24" y="64" fill="#64748b" font-size="13">${escapeXml(statuses.length)} 个节点${probeName ? ` · 探针 ${escapeXml(probeName)}` : ''} · ${escapeXml(checkedAt)}</text>
-      ${rows}
-      <text x="24" y="${height - 23}" fill="#64748b" font-size="12">结果受目标平台策略与网络波动影响，仅供参考</text>
-    </svg>`;
-    return sharp(Buffer.from(svg)).png().toBuffer();
+    if (rows.length === 0) {
+      body += cell(0, y, width, '暂无检测结果', { color: MUTED });
+      y += ROW;
+    }
+    body += verticals(table, 44, y);
+    const foot = footer([
+      `版本=${appVersion}  节点=${statuses.length}  在线=${statuses.filter(item => item.online === true).length}  离线=${statuses.filter(item => item.online === false).length}`,
+      `生成时间=${formatTime(new Date().toISOString())}  解锁结果来自 miaospeed-scripts，受目标平台策略与网络波动影响，仅供参考`
+    ], y, width);
+    body += foot.body;
+    const height = y + foot.height;
+    return toPng(svg.document(width, height, body), width, height);
   }
 }
 
 module.exports = new ReportService();
+module.exports.STATUS_FILL = STATUS_FILL;

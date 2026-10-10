@@ -6,11 +6,9 @@ const path = require('path');
 const logger = require('./utils/logger');
 const config = require('./utils/config');
 const schedulerService = require('./services/scheduler');
-const mihomoService = require('./services/mihomo');
 const authService = require('./services/auth');
-const registry = require('./probe/registry');
-const { ProbeHub } = require('./probe/hub');
-const { loadOrCreateCertificate } = require('./probe/certificate');
+const registry = require('./services/probes');
+const { version } = require('../package.json');
 
 // Import routes
 const subscriptionsRouter = require('./routes/subscriptions');
@@ -21,9 +19,9 @@ const manualNodesRouter = require('./routes/manualNodes');
 const importsRouter = require('./routes/imports');
 const reportsRouter = require('./routes/reports');
 const authRouter = require('./routes/auth');
-const probesRouter = require('./routes/probes');
 const backendsRouter = require('./routes/backends');
 const deepTestsRouter = require('./routes/deepTests');
+const unlockRouter = require('./routes/unlock');
 const miaospeedBackends = require('./miaospeed/backends');
 
 const app = express();
@@ -52,23 +50,23 @@ app.use(bodyParser.urlencoded({ extended: true, limit: '4mb' }));
 app.use(express.static(path.join(__dirname, '../public')));
 
 // Public API routes
-// Liveness: the web server is up. `status` reads "degraded" while the Mihomo core is not ready.
-// Without a local probe the master does not need Mihomo at all.
-const coreReady = () => !registry.localEnabled || mihomoService.ready;
+// Liveness: the web server is up. `status` reads "degraded" while the local miaospeed is enabled but
+// not running (without it only remote backends can test).
+const engineReady = () => !miaospeedBackends.local.enabled || miaospeedBackends.local.ready;
 app.get('/api/health', (req, res) => {
-  const mihomoReady = coreReady();
+  const ready = engineReady();
   res.json({
     success: true,
-    status: mihomoReady ? 'ok' : 'degraded',
-    message: mihomoReady ? 'Node Watcher is running' : 'Node Watcher is running, but the Mihomo core is not ready',
-    version: '2.0.0',
-    mihomoReady
+    status: ready ? 'ok' : 'degraded',
+    message: ready ? 'Node Watcher is running' : 'Node Watcher is running, but the local miaospeed is not ready',
+    version,
+    engineReady: ready
   });
 });
-// Readiness: 503 while monitoring is impossible, so container health checks reflect the real state.
+// Readiness: 503 while the local test engine is down, so container health checks reflect it.
 app.get('/api/ready', (req, res) => {
-  const mihomoReady = coreReady();
-  res.status(mihomoReady ? 200 : 503).json({ success: mihomoReady, mihomoReady });
+  const ready = engineReady();
+  res.status(ready ? 200 : 503).json({ success: ready, engineReady: ready });
 });
 app.use('/api/auth', authRouter);
 
@@ -81,9 +79,9 @@ app.use('/api/system', systemRouter);
 app.use('/api/manual-nodes', manualNodesRouter);
 app.use('/api/imports', importsRouter);
 app.use('/api/reports', reportsRouter);
-app.use('/api/probes', probesRouter);
 app.use('/api/backends', backendsRouter);
 app.use('/api/deep-tests', deepTestsRouter);
+app.use('/api/unlock', unlockRouter);
 
 // Serve frontend for all other routes
 app.get('*', (req, res) => {
@@ -98,8 +96,6 @@ app.use((err, req, res, next) => {
     error: err.message
   });
 });
-
-let hub = null;
 
 // Start server
 const PORT = Number(process.env.PORT) || config.getConfig().server.port || 3000;
@@ -118,39 +114,9 @@ const httpServer = app.listen(PORT, async () => {
   logger.info(`🔌 API: http://localhost:${PORT}/api`);
   logger.info(`📈 Public Stats: http://localhost:${PORT}/api/nodes/public`);
 
-  // Start Mihomo Core (only needed when this host is itself a probe)
-  if (registry.localEnabled) {
-    try {
-      await mihomoService.start();
-    } catch (e) {
-      logger.error(`Failed to start Mihomo service: ${e.message}`);
-    }
-  } else {
-    logger.info('Local probe disabled (LOCAL_PROBE=false): only remote probes check nodes');
-  }
-
-  // Listener for remote probes
-  const probePort = String(process.env.PROBE_PORT ?? '7443').trim();
-  if (probePort && probePort !== '0' && probePort.toLowerCase() !== 'off') {
-    try {
-      const certificate = loadOrCreateCertificate(path.join(process.cwd(), 'data'));
-      hub = new ProbeHub({
-        registry, cert: certificate.cert, key: certificate.key,
-        host: process.env.PROBE_LISTEN || '0.0.0.0', port: Number(probePort)
-      });
-      hub.fingerprint = certificate.fingerprint;
-      await hub.start();
-      schedulerService.watchProbes(hub);
-      logger.info(`Probe certificate fingerprint (SHA-256): ${certificate.fingerprint}`);
-    } catch (error) {
-      hub = null;
-      registry.hub = null;
-      logger.error(`Probe listener disabled: ${error.message}`);
-    }
-  }
-
-  // miaospeed backends: the local engine plus configured forward / reverse backends
-  miaospeedBackends.start();
+  // miaospeed backends: the local engine plus configured forward / reverse backends. The first
+  // health check runs right after, so wait for the local engine to come up.
+  await miaospeedBackends.start();
 
   // Initialize scheduler
   try {
@@ -167,7 +133,7 @@ httpServer.on('upgrade', (req, socket, head) => {
   if (!miaospeedBackends.handleUpgrade(req, socket, head)) socket.destroy();
 });
 
-// Graceful shutdown: stop timers, flush pending history, wait for the Mihomo child to exit.
+// Graceful shutdown: stop timers, flush pending history, wait for the miaospeed child to exit.
 let shuttingDown = false;
 async function shutdown(reason, exitCode = 0) {
   if (shuttingDown) return;
@@ -176,9 +142,7 @@ async function shutdown(reason, exitCode = 0) {
   try {
     schedulerService.stopMonitoring();
     registry.flushAll();
-    if (hub) await hub.stop();
     await miaospeedBackends.stop();
-    await mihomoService.shutdown();
   } catch (error) {
     logger.error(`Error during shutdown: ${error.message}`);
   }

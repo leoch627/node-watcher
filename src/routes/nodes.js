@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const schedulerService = require('../services/scheduler');
 const config = require('../utils/config');
-const registry = require('../probe/registry');
+const registry = require('../services/probes');
 
 // The probe a request is about (?probe=<id>); defaults to the first listed probe.
 function probeFrom(req) {

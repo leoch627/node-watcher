@@ -1,5 +1,6 @@
 const express = require('express');
 const backends = require('../miaospeed/backends');
+const registry = require('../services/probes');
 
 const router = express.Router();
 const MIAOSPEED_IMAGE = process.env.MIAOSPEED_IMAGE || 'airportr/miaospeed:4.7.8';
@@ -66,6 +67,7 @@ router.post('/:id/check', async (req, res) => {
 
 router.delete('/:id', (req, res) => {
   if (!backends.remove(req.params.id)) return res.status(404).json({ success: false, error: 'Backend not found' });
+  registry.forget(req.params.id);
   res.json({ success: true });
 });
 

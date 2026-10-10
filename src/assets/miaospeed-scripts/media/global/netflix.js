@@ -1,0 +1,12 @@
+// @id: netflix
+// @name: Netflix
+// @description: 检测 Netflix 可用性
+// @category: media
+// @regions: global
+// @tags: stream, video
+// @priority: 1
+/*!
+ * Copyright (C) 2026 CloudPassenger
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+const e="239,107,115",t="253,109,20",s="失败",n="failed",o="warning",r="仅自制",i={Accept:"*/*;q=0.8,application/signed-exchange;v=b3;q=0.7","Accept-Language":"en-US,en;q=0.9","Sec-CH-UA":'"Google Chrome";v="151", "Chromium";v="151", "Not_A Brand";v="8"',"Sec-CH-UA-Mobile":"?0","Sec-CH-UA-Platform":'"Windows"',"Sec-Fetch-Dest":"document","Sec-Fetch-Mode":"navigate","Sec-Fetch-Site":"none","Sec-Fetch-User":"?1","Upgrade-Insecure-Requests":"1","User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.76 Safari/537.36"};function a(e){let t=[/"country"\s*:\s*"([A-Z]{2})"/,/"requestCountry"\s*:\s*\{\s*"id"\s*:\s*"([A-Z]{2})"/,/"preferredLocale"\s*:\s*\{\s*"country"\s*:\s*"([A-Z]{2})"/,/"geo"\s*:\s*\{[^}]*"country"\s*:\s*"([A-Z]{2})"/,/data-country\s*=\s*"([A-Z]{2})"/];for(let s=0;s<t.length;s++){let n=e.match(t[s]);if(n&&n[1])return n[1]}return""}function d(e){return fetch(e,{method:"GET",headers:i,noRedir:!1,retry:3,timeout:15e3})}function handler(){let i=d("https://www.netflix.com/title/70143836"),u=d("https://www.netflix.com/title/81280792");if(404===i.statusCode&&404===u.statusCode)return{text:r,background:t,status:o};if(403===i.statusCode&&403===u.statusCode)return{text:s,background:e,status:n};let c=200===i.statusCode||301===i.statusCode,l=200===u.statusCode||301===u.statusCode;if(c||l){let f="",p="",x=!1,h=!1;if(c){let e=i.body||"";x=e.indexOf("Oh no!")>-1,(e.indexOf('property="og:video"')>-1||e.indexOf('data-uia="episodes"')>-1||e.indexOf("playableVideo")>-1)&&(f=e,p=a(e))}if(!f&&l){let e=u.body||"";h=e.indexOf("Oh no!")>-1,(e.indexOf('property="og:video"')>-1||e.indexOf('data-uia="episodes"')>-1||e.indexOf("playableVideo")>-1)&&(f=e,p=a(e))}if(f){if(!p){let e=d("https://www.netflix.com/title/80018499").url||"";if(e&&-1===e.indexOf("/title/80018499")){let t=e.replace(/^https?:\/\//,"").split("/");t.length>=4&&(p=t[3].split("-")[0])}p||(p="Unknown")}return{text:`解锁(${p.toLowerCase()})`,background:"186,230,126",status:"unlocked",region:p}}return x&&h?{text:s,background:e,status:n}:{text:r,background:t,status:o}}return(i.redirects||[]).concat(u.redirects||[]).join(" ").indexOf("browse")>-1?{text:s,background:e,status:n}:{text:"未知",background:"92,207,230",status:"unknown"}}module.exports=handler;

@@ -1,7 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 const logger = require('../utils/logger');
-const prober = require('./prober');
 const { writeFileAtomic } = require('../utils/atomicWrite');
 
 const HOUR = 3600000;
@@ -138,51 +137,21 @@ class MonitorService {
     return safe;
   }
 
-  // Returns the updated status, or null when monitoring itself was unavailable (Mihomo not ready,
-  // proxy not loaded). Those probes say nothing about the node, so they must not touch state or history.
-  async checkNode(node, timeout = 10000, options = {}) {
-    const retries = Math.max(0, Math.min(3, Number(options.retries) || 0));
-    const result = await prober.probeNode(node, timeout, { url: options.url, retries });
-    return this.applyProbeResult(node, result, options);
-  }
-
-  // Records one probe result (local or reported by a remote probe).
+  // Records one probe result from a miaospeed backend. Results without a definite online/offline
+  // verdict (the backend could not test) must not touch state or history.
   applyProbeResult(node, result, options = {}) {
     if (!result || result.skipped || typeof result.online !== 'boolean') return null;
     const status = {
       online: result.online,
       responseTime: Number.isFinite(result.latency) ? result.latency : null,
+      rtt: Number.isFinite(result.rtt) ? result.rtt : null,
       lastCheck: result.lastCheck || new Date().toISOString(),
       error: result.error || null,
-      checkMethod: options.checkMethod || 'mihomo'
+      checkMethod: options.checkMethod || 'miaospeed'
     };
     const updated = this.updateNodeStatus(node, status, options);
     this.recordHistory(node, result.online);
     return updated;
-  }
-
-  async checkAll(nodes, timeout = 10000, concurrency = 8, onProgress, options = {}) {
-    const results = new Array(nodes.length);
-    let cursor = 0;
-    let completed = 0;
-    const worker = async () => {
-      while (cursor < nodes.length) {
-        const index = cursor;
-        cursor += 1;
-        try {
-          results[index] = await this.checkNode(nodes[index], timeout, options);
-        } catch (error) {
-          results[index] = this.updateNodeStatus(nodes[index], {
-            online: false, responseTime: null, lastCheck: new Date().toISOString(),
-            error: error.message, checkMethod: 'mihomo-error'
-          }, options);
-        }
-        completed += 1;
-        if (onProgress) onProgress(completed, nodes.length);
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(concurrency, nodes.length) }, worker));
-    return results;
   }
 
   // ---- status & alert state ----
@@ -228,35 +197,15 @@ class MonitorService {
 
   // Keep the last good result for a service when the latest attempt only produced an error.
   mergeMedia(previous, next) {
-    if (!next?.services) return next;
-    if (!previous?.services) return next;
+    if (!next?.services || !previous?.services) return next;
     const services = { ...next.services };
     for (const [key, value] of Object.entries(next.services)) {
       const old = previous.services[key];
       if (value?.status === 'error' && old && old.status !== 'error') {
-        services[key] = { ...old, stale: true, staleSince: old.staleSince || previous.checkedAt || null, lastError: value.detail };
+        services[key] = { ...old, stale: true, staleSince: old.staleSince || previous.checkedAt || null, lastError: value.text || value.detail };
       }
     }
-    // A placeholder result (whole-node failure) has no `regional` key: keep what we had.
-    let regional = next.regional === undefined ? (previous.regional || null) : next.regional;
-    if (next.regional && previous.regional?.region === regional.region) {
-      const merged = { ...regional.services };
-      for (const [key, value] of Object.entries(regional.services)) {
-        const old = previous.regional.services?.[key];
-        if (value?.status === 'error' && old && old.status !== 'error') {
-          merged[key] = { ...old, stale: true, staleSince: old.staleSince || previous.checkedAt || null, lastError: value.detail };
-        }
-      }
-      regional = { ...regional, services: merged };
-    }
-    return {
-      ...next,
-      exit: next.exit?.ip ? next.exit : (previous.exit || next.exit),
-      claimedRegion: next.claimedRegion ?? previous.claimedRegion ?? null,
-      regionMismatch: next.regionMismatch ?? previous.regionMismatch ?? false,
-      services,
-      regional
-    };
+    return { ...next, exit: next.exit?.ip ? next.exit : (previous.exit || next.exit), services };
   }
 
   setMediaResult(nodeId, media) {
@@ -297,6 +246,7 @@ class MonitorService {
         node: this.publicNode(node),
         online: null,
         responseTime: null,
+        rtt: null,
         lastCheck: null,
         error: null,
         checkMethod: null,

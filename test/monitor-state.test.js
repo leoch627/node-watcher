@@ -5,7 +5,6 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { MonitorService } = require('../src/services/monitor');
-const mihomoService = require('../src/services/mihomo');
 
 const HOUR = 3600000;
 const tmpHistory = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'node-watcher-history-')), 'history.json');
@@ -49,34 +48,28 @@ test('nodes that were already offline at startup do not produce offline or recov
   assert.deepEqual(events, [null, null, null, null]);
 });
 
-test('probes that could not run (core not ready) leave state and history untouched', async () => {
+test('results without a verdict (backend could not test) leave state and history untouched', () => {
   const svc = new MonitorService({ historyPath: tmpHistory() });
   const n = node('skip');
   svc.syncNodes([n]);
-  const original = mihomoService.testNode;
-  mihomoService.testNode = async () => ({ online: null, latency: null, skipped: true, error: 'Mihomo is not ready' });
-  try {
-    assert.equal(await svc.checkNode(n, 1000, {}), null);
-  } finally {
-    mihomoService.testNode = original;
-  }
+  assert.equal(svc.applyProbeResult(n, { online: null, skipped: true, error: 'backend offline' }), null);
+  assert.equal(svc.applyProbeResult(n, null), null);
   assert.equal(svc.getNodeStatus('skip').online, null);
   assert.equal(svc.nodeHistory.size, 0);
 });
 
-test('a failed probe is retried before the node is declared offline', async () => {
+test('miaospeed results record HTTP latency, RTT and history', () => {
   const svc = new MonitorService({ historyPath: tmpHistory() });
-  const n = node('retry');
-  let calls = 0;
-  const original = mihomoService.testNode;
-  mihomoService.testNode = async () => (++calls === 1 ? { online: false, latency: null, error: 'timeout' } : { online: true, latency: 80 });
-  try {
-    const status = await svc.checkNode(n, 1000, { retries: 1 });
-    assert.equal(status.online, true);
-    assert.equal(calls, 2);
-  } finally {
-    mihomoService.testNode = original;
-  }
+  const n = node('ms');
+  svc.syncNodes([n]);
+  const status = svc.applyProbeResult(n, { online: true, latency: 180, rtt: 52 }, { failureThreshold: 2 });
+  assert.equal(status.responseTime, 180);
+  assert.equal(status.rtt, 52);
+  assert.equal(status.checkMethod, 'miaospeed');
+  assert.equal(svc.calculateUptime('ms', 24).totalChecks, 1);
+  const failed = svc.applyProbeResult(n, { online: false, latency: null, rtt: null, error: '连接超时或失败' });
+  assert.equal(failed.online, false);
+  assert.equal(failed.rtt, null);
 });
 
 test('uptime is computed from hourly buckets and old buckets are pruned', () => {
@@ -142,29 +135,21 @@ test('an error-only media result keeps the last good result and marks it stale',
   const svc = new MonitorService({ historyPath: tmpHistory() });
   const n = node('media');
   svc.syncNodes([n]);
-  const good = { status: 'unlocked', detail: 'Full catalog', region: 'JP' };
-  const bad = { status: 'error', detail: 'Timeout', region: null };
+  const good = { status: 'unlocked', text: '解锁(jp)', region: 'JP' };
+  const bad = { status: 'error', text: '未知(超时)', region: null };
   svc.setMediaResult('media', {
-    checkedAt: 't1', exit: { ip: '1.1.1.1', region: 'JP' }, claimedRegion: 'JP', regionMismatch: false,
-    services: { netflix: good, youtube: good },
-    regional: { region: 'JP', services: { abema: { ...good, label: 'Abema' } } }
+    checkedAt: 't1', exit: { ip: '1.1.1.1', region: 'JP' },
+    services: { netflix: good, youtube: good, abema: { ...good, regional: true } }
   });
   svc.setMediaResult('media', {
-    checkedAt: 't2', exit: { ip: null, region: null }, claimedRegion: 'JP', regionMismatch: false,
-    services: { netflix: bad, youtube: good },
-    regional: { region: 'JP', services: { abema: { ...bad, label: 'Abema' } } }
+    checkedAt: 't2', exit: { ip: null, region: null },
+    services: { netflix: bad, youtube: good, abema: { ...bad, regional: true } }
   });
   const media = svc.getNodeStatus('media').media;
   assert.equal(media.services.netflix.status, 'unlocked');
   assert.equal(media.services.netflix.stale, true);
-  assert.equal(media.services.netflix.lastError, 'Timeout');
+  assert.equal(media.services.netflix.lastError, '未知(超时)');
   assert.equal(media.services.youtube.stale, undefined);
-  assert.equal(media.regional.services.abema.stale, true);
+  assert.equal(media.services.abema.stale, true);
   assert.equal(media.exit.ip, '1.1.1.1');
-
-  // whole-node failure placeholder (no `regional` key) must not erase regional results
-  svc.setMediaResult('media', { checkedAt: 't3', exit: { ip: null, region: null }, services: { netflix: bad, youtube: bad } });
-  const afterFailure = svc.getNodeStatus('media').media;
-  assert.equal(afterFailure.regional.services.abema.status, 'unlocked');
-  assert.equal(afterFailure.claimedRegion, 'JP');
 });

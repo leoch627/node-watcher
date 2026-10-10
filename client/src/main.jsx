@@ -44,26 +44,17 @@ function Metric({ label, value, detail, tone }) {
   </div>;
 }
 
-const serviceNames = { netflix: 'Netflix', disney: 'Disney+', youtube: 'YouTube', primeVideo: 'Prime', chatgpt: 'ChatGPT', tiktok: 'TikTok', hbo: 'HBO Max' };
-
-const unlockLabels = { native: '原生', dns: 'DNS' };
+const unlockVariants = { unlocked: 'success', limited: 'warning', blocked: 'danger', na: 'outline', error: 'outline' };
+const unlockText = { unlocked: '解锁', limited: '受限', blocked: '失败', na: 'N/A', error: '未知' };
 
 function unlockTip(value) {
-  if (value.unlockType === 'native') return `原生解锁：平台看到的 IP ${value.platformIp} 与节点出口一致`;
-  if (value.unlockType === 'dns') return `DNS / 分流解锁：${value.unlockNote || ''}`;
-  return value.unlockNote || '';
+  return [value.text, value.stale ? `（上次成功结果；最近一次：${value.lastError || '失败'}）` : '', value.elapsedMs ? `耗时 ${value.elapsedMs} ms` : ''].filter(Boolean).join('\n');
 }
 
 function ServiceState({ value }) {
   if (!value) return <span className="text-muted-foreground">-</span>;
-  const variants = { unlocked: 'success', limited: 'warning', blocked: 'danger', error: 'outline' };
-  const labels = { unlocked: value.region || '可用', limited: '受限', blocked: '不可用', error: '错误' };
-  const tip = [value.detail || labels[value.status], unlockTip(value), value.stale ? '（上次成功结果）' : ''].filter(Boolean).join('\n');
-  return <Tooltip content={tip}>
-    <span className="inline-flex items-center gap-1">
-      <Badge variant={variants[value.status] || 'outline'}>{labels[value.status] || value.status}</Badge>
-      {value.unlockType && <span className={`text-[10px] font-medium ${value.unlockType === 'dns' ? 'text-amber-700' : 'text-muted-foreground'}`}>{unlockLabels[value.unlockType]}</span>}
-    </span>
+  return <Tooltip content={unlockTip(value) || unlockText[value.status]}>
+    <span><Badge variant={unlockVariants[value.status] || 'outline'} className={value.stale ? 'opacity-60' : ''}>{value.status === 'unlocked' && value.region ? value.region : unlockText[value.status] || value.status}</Badge></span>
   </Tooltip>;
 }
 
@@ -90,14 +81,12 @@ function RegionCell({ node, media }) {
   </Tooltip>;
 }
 
-function RegionalServices({ regional }) {
-  const entries = Object.entries(regional?.services || {});
+function RegionalServices({ services }) {
+  const entries = Object.entries(services || {}).filter(([, value]) => value?.regional);
   if (entries.length === 0) return <span className="text-muted-foreground">-</span>;
-  const variants = { unlocked: 'success', limited: 'warning', blocked: 'danger', error: 'outline' };
-  const labels = { unlocked: '可用', limited: '受限', blocked: '不可用', error: '错误' };
   return <div className="flex flex-wrap gap-1.5">
-    {entries.map(([key, value]) => <Tooltip key={key} content={[value.detail || labels[value.status] || '', unlockTip(value), value.stale ? '（上次成功结果）' : ''].filter(Boolean).join('\n')}>
-      <Badge variant={variants[value.status] || 'outline'}>{value.label || key} {labels[value.status] || value.status}{value.unlockType ? ` · ${unlockLabels[value.unlockType]}` : ''}</Badge>
+    {entries.map(([key, value]) => <Tooltip key={key} content={unlockTip(value)}>
+      <Badge variant={unlockVariants[value.status] || 'outline'} className={value.stale ? 'opacity-60' : ''}>{value.label || key} {value.status === 'unlocked' && value.region ? value.region : unlockText[value.status] || value.status}</Badge>
     </Tooltip>)}
   </div>;
 }
@@ -131,52 +120,6 @@ function CopyField({ label, value, notify }) {
     <div className="flex items-center justify-between text-xs font-medium text-muted-foreground"><span>{label}</span><Button size="sm" variant="ghost" type="button" onClick={copy}><Copy />复制</Button></div>
     <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md border bg-muted/40 p-3 font-mono text-xs">{value}</pre>
   </div>;
-}
-
-function JoinDetails({ info, notify }) {
-  return <div className="grid gap-4">
-    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">加入串包含探针密钥，只显示这一次。每台探针机器使用自己的加入串；丢失后可重置密钥生成新的。</div>
-    <CopyField label="一键部署（推荐，自动安装 Docker 并等待连上主控；需要 root）" value={info.script} notify={notify} />
-    <CopyField label="已有 Docker 时直接运行" value={info.docker} notify={notify} />
-    <CopyField label="加入串（docker-compose.probe.yml 的 NODE_WATCHER_JOIN）" value={info.join} notify={notify} />
-    <CopyField label="源码运行" value={info.node} notify={notify} />
-  </div>;
-}
-
-function ProbesSection({ notify, onChanged }) {
-  const [data, setData] = useState({ probes: [], listener: null });
-  const [name, setName] = useState('');
-  const [busy, setBusy] = useState('');
-  const [join, setJoin] = useState(null);
-  const load = async () => { try { setData(await api('/api/probes')); } catch (error) { notify(error.message, true); } };
-  useEffect(() => { load(); const timer = setInterval(load, 10000); return () => clearInterval(timer); }, []);
-  const act = async (key, run) => { setBusy(key); try { await run(); await load(); await onChanged(); } catch (error) { notify(error.message, true); } finally { setBusy(''); } };
-  const create = event => { event.preventDefault(); act('create', async () => { const result = await api('/api/probes', { method: 'POST', body: JSON.stringify({ name }) }); setName(''); setJoin(result); }); };
-  const rotate = probe => { if (!confirm(`重置“${probe.name}”的密钥？旧加入串会立即失效，探针需要用新加入串重新部署。`)) return; act(probe.id, async () => setJoin(await api(`/api/probes/${probe.id}/rotate`, { method: 'POST', body: '{}' }))); };
-  const remove = probe => { if (!confirm(`删除探针“${probe.name}”？它的检测历史也会删除。`)) return; act(probe.id, () => api(`/api/probes/${probe.id}`, { method: 'DELETE' })); };
-  const toggle = probe => act(probe.id, () => api(`/api/probes/${probe.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: !probe.enabled }) }));
-  const listener = data.listener;
-  return <section className="border-b pb-8 pt-8">
-    <div className="mb-2 flex items-center gap-2"><Radar className="size-4" /><h2 className="text-base font-semibold">探针</h2></div>
-    <p className="mb-5 text-sm text-muted-foreground">在不同网络里部署探针，用同一份订阅从多个地点检测。探针通过 TLS 主动连接主控{listener?.enabled ? `的 ${listener.publicPort} 端口` : ''}，自身不开放端口。</p>
-    {listener && !listener.enabled && <div className="mb-4 rounded-md border bg-muted/40 px-3 py-2 text-sm">探针监听未启用（PROBE_PORT=0 或证书生成失败，详见日志）。</div>}
-    {listener?.fingerprint && <div className="mb-4 text-xs text-muted-foreground">主控证书指纹（SHA-256）：<span className="break-all font-mono">{listener.fingerprint}</span></div>}
-    <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[640px] text-sm">
-      <thead className="bg-muted/60 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-2.5 font-medium">名称</th><th className="px-4 py-2.5 font-medium">状态</th><th className="px-4 py-2.5 font-medium">节点</th><th className="px-4 py-2.5 font-medium">来源地址</th><th className="px-4 py-2.5 font-medium">启用</th><th className="w-24 px-3 py-2.5"></th></tr></thead>
-      <tbody>{data.probes.length === 0 && <EmptyRow columns={6}>尚未添加探针</EmptyRow>}{data.probes.map(probe => <tr key={probe.id} className="border-t">
-        <td className="px-4 py-3"><div className="font-medium">{probe.name}</div><div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{probe.type === 'local' ? '主控本机' : probe.id}</div></td>
-        <td className="px-4 py-3">{probe.type === 'local' ? <Badge variant="outline">本机</Badge> : probe.connected ? <Badge variant={probe.session?.mihomoReady ? 'success' : 'warning'}>{probe.session?.mihomoReady ? '在线' : 'Mihomo 未就绪'}</Badge> : <Badge variant="danger">离线</Badge>}{!probe.connected && probe.lastSeen && <div className="mt-1 text-[11px] text-muted-foreground">最后在线 {formatTime(probe.lastSeen)}</div>}</td>
-        <td className="px-4 py-3 text-xs tabular-nums"><span className="text-emerald-700">{probe.summary.online}</span> / <span className="text-red-700">{probe.summary.offline}</span> / <span className="text-muted-foreground">{probe.summary.pending}</span></td>
-        <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{probe.session ? `${probe.session.address}${probe.session.hostname ? ` (${probe.session.hostname})` : ''}` : '-'}</td>
-        <td className="px-4 py-3">{probe.type === 'remote' ? <Switch checked={probe.enabled} onCheckedChange={() => toggle(probe)} disabled={busy === probe.id} aria-label="启用探针" /> : <span className="text-muted-foreground">-</span>}</td>
-        <td className="px-3 py-3">{probe.type === 'remote' && <div className="flex justify-end gap-1"><Tooltip content="重置密钥"><Button size="icon" variant="ghost" onClick={() => rotate(probe)} disabled={Boolean(busy)}><KeyRound /></Button></Tooltip><Tooltip content="删除"><Button size="icon" variant="ghost" onClick={() => remove(probe)} disabled={Boolean(busy)}><Trash2 /></Button></Tooltip></div>}</td>
-      </tr>)}</tbody>
-    </table></div>
-    <form onSubmit={create} className="mt-4 flex flex-wrap items-end gap-3"><label className="grid min-w-56 flex-1 gap-2 text-sm font-medium">新探针名称<Input value={name} onChange={e => setName(e.target.value)} placeholder="例如：上海电信" maxLength={40} required /></label><Button disabled={Boolean(busy) || !listener?.enabled}>{busy === 'create' ? <LoaderCircle className="animate-spin" /> : <Plus />}添加探针</Button></form>
-    <Dialog open={Boolean(join)} onOpenChange={open => { if (!open) setJoin(null); }}>
-      <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>部署探针：{join?.probe?.name}</DialogTitle><DialogDescription>在目标网络里的机器上运行下面任一命令，探针连上后会自动加入检测。</DialogDescription></DialogHeader>{join && <JoinDetails info={join} notify={notify} />}<DialogFooter><Button onClick={() => setJoin(null)}>完成</Button></DialogFooter></DialogContent>
-    </Dialog>
-  </section>;
 }
 
 function Select({ value, onChange, children, className = '', ...props }) {
@@ -338,6 +281,36 @@ function DeepTestView({ subscriptions, imports, notify }) {
   </div>;
 }
 
+const categoryLabels = { media: '流媒体', ai: 'AI', games: '游戏', network: '网络', search: '搜索', social: '社交' };
+
+function UnlockSection({ notify, onSaved }) {
+  const [data, setData] = useState(null);
+  const [chosen, setChosen] = useState([]);
+  const [regional, setRegional] = useState(true);
+  const [query, setQuery] = useState('');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    api('/api/unlock').then(result => { setData(result); setChosen(result.settings.scripts); setRegional(result.settings.regional); }).catch(error => notify(error.message, true));
+  }, []);
+  if (!data) return null;
+  const byId = new Map(data.scripts.map(item => [item.id, item]));
+  const needle = query.trim().toLowerCase();
+  const matches = data.scripts.filter(item => !needle || `${item.id} ${item.name} ${item.description} ${item.regions.join(' ')} ${categoryLabels[item.category] || ''}`.toLowerCase().includes(needle));
+  const toggle = id => setChosen(current => (current.includes(id) ? current.filter(item => item !== id) : [...current, id]));
+  const save = async () => {
+    setSaving(true);
+    try { await api('/api/unlock', { method: 'PUT', body: JSON.stringify({ scripts: chosen, regional }) }); notify('解锁检测设置已保存'); await onSaved(); } catch (error) { notify(error.message, true); } finally { setSaving(false); }
+  };
+  return <section className="border-b pb-8 pt-8">
+    <div className="mb-2 flex items-center gap-2"><Play className="size-4" /><h2 className="text-base font-semibold">解锁检测</h2></div>
+    <p className="mb-5 text-sm text-muted-foreground">使用 miaospeed-scripts（{data.scripts.length} 个脚本）在 miaospeed 后端上检测。选中的脚本作为节点表的列，按选择顺序排列。</p>
+    <div className="mb-3 flex flex-wrap gap-1.5">{chosen.map(id => <button key={id} type="button" onClick={() => toggle(id)} className="inline-flex items-center gap-1 rounded-md border bg-muted/50 px-2 py-1 text-xs hover:bg-muted">{byId.get(id)?.name || id}<X className="size-3" /></button>)}{chosen.length === 0 && <span className="text-xs text-muted-foreground">未选择，使用默认列</span>}</div>
+    <div className="mb-3 flex flex-wrap items-center gap-3"><div className="relative min-w-56 flex-1 sm:max-w-sm"><Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input className="pl-9" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索服务、地区（如 hk、jp）或分类" /></div><label className="flex items-center gap-2 text-sm"><Switch checked={regional} onCheckedChange={setRegional} />按节点地区自动追加区域服务</label></div>
+    <div className="grid max-h-72 gap-1 overflow-y-auto rounded-md border p-2 sm:grid-cols-2 lg:grid-cols-3">{matches.map(item => <label key={item.id} className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"><input type="checkbox" className="mt-0.5 size-4 accent-zinc-900" checked={chosen.includes(item.id)} onChange={() => toggle(item.id)} /><span className="min-w-0"><span className="font-medium">{item.name}</span><span className="ml-1.5 text-[11px] text-muted-foreground">{categoryLabels[item.category] || item.category} · {item.regions.join('/')}</span></span></label>)}</div>
+    <div className="mt-4 flex gap-2"><Button onClick={save} disabled={saving}>{saving ? <LoaderCircle className="animate-spin" /> : <Check />}保存解锁设置</Button><Button variant="outline" onClick={() => setChosen(data.defaults)}>恢复默认</Button></div>
+  </section>;
+}
+
 function EmptyRow({ columns, children }) {
   return <tr><td colSpan={columns} className="h-32 text-center text-sm text-muted-foreground">{children}</td></tr>;
 }
@@ -386,10 +359,10 @@ function NodeState({ online }) {
   return <span className={`inline-flex items-center gap-1.5 ${online ? 'text-emerald-700' : 'text-red-700'}`}><span className={`size-1.5 rounded-full ${online ? 'bg-emerald-500' : 'bg-red-500'}`} />{online ? '在线' : '离线'}</span>;
 }
 
-function NodeTable({ nodes, selected, onSelect, onDelete }) {
+function NodeTable({ nodes, columns, selected, onSelect, onDelete }) {
   const multiProbe = nodes.some(item => item.probes?.length > 1);
   return <div className="overflow-x-auto rounded-md border">
-    <table className="w-full min-w-[1560px] border-collapse text-sm">
+    <table className="w-full min-w-[1200px] border-collapse text-sm">
       <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
         <tr>
           <th className="w-10 px-3 py-2.5"></th>
@@ -400,13 +373,13 @@ function NodeTable({ nodes, selected, onSelect, onDelete }) {
           <th className="w-24 px-3 py-2.5 font-medium">状态</th>
           <th className="w-24 px-3 py-2.5 font-medium">延迟</th>
           {multiProbe && <th className="w-28 px-3 py-2.5 font-medium"><Tooltip content={`圆点依次为：${(nodes.find(item => item.probes?.length)?.probes || []).map(probe => probe.name).join('、')}`}><span className="cursor-help underline decoration-dotted underline-offset-4">各探针</span></Tooltip></th>}
-          {Object.values(serviceNames).map(name => <th key={name} className="w-28 px-3 py-2.5 text-center font-medium">{name}</th>)}
-          <th className="min-w-48 px-3 py-2.5 font-medium">区域项目</th>
+          {columns.map(column => <th key={column.id} className="w-28 px-3 py-2.5 text-center font-medium">{column.label}</th>)}
+          <th className="min-w-48 px-3 py-2.5 font-medium">区域服务</th>
           <th className="w-12 px-3 py-2.5"></th>
         </tr>
       </thead>
       <tbody>
-        {nodes.length === 0 && <EmptyRow columns={multiProbe ? 17 : 16}>没有符合条件的节点</EmptyRow>}
+        {nodes.length === 0 && <EmptyRow columns={columns.length + (multiProbe ? 10 : 9)}>没有符合条件的节点</EmptyRow>}
         {nodes.map(status => <tr key={status.node.id} className="border-t hover:bg-muted/35">
           <td className="px-3 py-2.5"><input type="checkbox" className="size-4 accent-zinc-900" checked={selected.has(status.node.id)} onChange={() => onSelect(status.node.id)} aria-label={`选择 ${status.node.name}`} /></td>
           <td className="max-w-72 px-3 py-2.5">
@@ -416,11 +389,11 @@ function NodeTable({ nodes, selected, onSelect, onDelete }) {
           <td className="max-w-40 truncate px-3 py-2.5 text-muted-foreground" title={status.node.subscription}>{status.node.subscription}</td>
           <td className="px-3 py-2.5"><Badge variant="outline">{String(status.node.protocol).toUpperCase()}</Badge></td>
           <td className="px-3 py-2.5"><RegionCell node={status.node} media={status.media} /></td>
-          <td className="px-3 py-2.5"><NodeState online={status.online} /></td>
-          <td className="px-3 py-2.5 font-mono text-xs tabular-nums">{status.online ? `${status.responseTime} ms` : '-'}</td>
+          <td className="whitespace-nowrap px-3 py-2.5"><NodeState online={status.online} /></td>
+          <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs tabular-nums">{status.online ? <Tooltip content="HTTP 延迟（含建连）/ 延迟 RTT"><span>{status.responseTime} ms{status.rtt ? <span className="ml-1 text-muted-foreground">/ {status.rtt}</span> : null}</span></Tooltip> : '-'}</td>
           {multiProbe && <td className="px-3 py-2.5"><ProbeDots probes={status.probes} /></td>}
-          {Object.keys(serviceNames).map(key => <td key={key} className="px-3 py-2.5 text-center"><ServiceState value={status.media?.services?.[key]} /></td>)}
-          <td className="px-3 py-2.5"><RegionalServices regional={status.media?.regional} /></td>
+          {columns.map(column => <td key={column.id} className="px-3 py-2.5 text-center"><ServiceState value={status.media?.services?.[column.id]} /></td>)}
+          <td className="px-3 py-2.5"><RegionalServices services={status.media?.services} /></td>
           <td className="px-3 py-2.5"><Tooltip content="排除节点"><Button size="icon" variant="ghost" onClick={() => onDelete(status.node)}><Trash2 /></Button></Tooltip></td>
         </tr>)}
       </tbody>
@@ -498,8 +471,7 @@ function ChannelHeader({ icon: Icon, name, detail, enabled, onEnabledChange }) {
 }
 
 function SettingsView({ config, notifications, onSaved, notify }) {
-  const probesSection = <ProbesSection notify={notify} onChanged={onSaved} />;
-  const defaultMonitoring = { checkIntervalMinutes: 5, timeoutSeconds: 10, concurrency: 8, retryAttempts: 1, failureThreshold: 2, subscriptionRefreshMinutes: 30, customHealthCheckUrl: '' };
+  const defaultMonitoring = { checkIntervalMinutes: 5, timeoutSeconds: 10, retryAttempts: 1, failureThreshold: 2, subscriptionRefreshMinutes: 30, customHealthCheckUrl: '' };
   const [monitoringForm, setMonitoringForm] = useState(config || defaultMonitoring);
   const [channels, setChannels] = useState({
     bark: { enabled: false, url: '' },
@@ -560,8 +532,7 @@ function SettingsView({ config, notifications, onSaved, notify }) {
       <div className="mb-5"><h2 className="text-base font-semibold">检测设置</h2><p className="mt-1 text-sm text-muted-foreground">节点状态变化由周期检测触发。</p></div>
       <div className="grid gap-5 sm:grid-cols-3">
         <label className="grid gap-2 text-sm font-medium">周期（分钟）<Input type="number" min="1" value={monitoringForm.checkIntervalMinutes ?? 5} onChange={e => setMonitoringForm({ ...monitoringForm, checkIntervalMinutes: Number(e.target.value) })} /></label>
-        <label className="grid gap-2 text-sm font-medium">超时（秒）<Input type="number" min="1" value={monitoringForm.timeoutSeconds ?? 10} onChange={e => setMonitoringForm({ ...monitoringForm, timeoutSeconds: Number(e.target.value) })} /></label>
-        <label className="grid gap-2 text-sm font-medium">并发数<Input type="number" min="1" max="32" value={monitoringForm.concurrency ?? 8} onChange={e => setMonitoringForm({ ...monitoringForm, concurrency: Number(e.target.value) })} /></label>
+        <label className="grid gap-2 text-sm font-medium">超时（秒，最多 10）<Input type="number" min="1" max="10" value={monitoringForm.timeoutSeconds ?? 10} onChange={e => setMonitoringForm({ ...monitoringForm, timeoutSeconds: Number(e.target.value) })} /></label>
         <label className="grid gap-2 text-sm font-medium">失败重试（次，0-3）<Input type="number" min="0" max="3" value={monitoringForm.retryAttempts ?? 1} onChange={e => setMonitoringForm({ ...monitoringForm, retryAttempts: Number(e.target.value) })} /></label>
         <label className="grid gap-2 text-sm font-medium">连续失败多少次才告警<Input type="number" min="1" max="10" value={monitoringForm.failureThreshold ?? 2} onChange={e => setMonitoringForm({ ...monitoringForm, failureThreshold: Number(e.target.value) })} /></label>
         <label className="grid gap-2 text-sm font-medium">订阅刷新（分钟）<Input type="number" min="1" value={monitoringForm.subscriptionRefreshMinutes ?? 30} onChange={e => setMonitoringForm({ ...monitoringForm, subscriptionRefreshMinutes: Number(e.target.value) })} /></label>
@@ -571,7 +542,7 @@ function SettingsView({ config, notifications, onSaved, notify }) {
     </form>
 
     <BackendsSection notify={notify} />
-    {probesSection}
+    <UnlockSection notify={notify} onSaved={onSaved} />
 
     <section className="pt-8">
       <div className="mb-2 flex items-center gap-2"><Bell className="size-4" /><h2 className="text-base font-semibold">状态告警</h2></div>
@@ -610,7 +581,7 @@ function App() {
   const [summary, setSummary] = useState({ total: 0, online: 0, offline: 0, pending: 0 });
   const [subscriptions, setSubscriptions] = useState([]);
   const [imports, setImports] = useState([]);
-  const [system, setSystem] = useState({ sourceStatus: [], jobs: {}, mihomoReady: false });
+  const [system, setSystem] = useState({ sourceStatus: [], jobs: {}, engineReady: false, unlock: { columns: [] } });
   const [monitoring, setMonitoring] = useState(null);
   const [notifications, setNotifications] = useState(null);
   const [selected, setSelected] = useState(new Set());
@@ -696,16 +667,15 @@ function App() {
   return <TooltipProvider><div className="min-h-screen">
     <header className="border-b bg-background"><div className="mx-auto flex h-16 max-w-[1600px] items-center justify-between gap-4 px-4 sm:px-6">
       <div className="flex min-w-0 items-center gap-3"><div className="flex size-9 items-center justify-center rounded-md border bg-foreground text-background"><Activity className="size-5" /></div><div className="min-w-0"><h1 className="truncate text-sm font-semibold">Node Watcher</h1>{(() => {
-        const current = probes.find(item => item.id === activeProbe?.id);
-        const remote = current?.type === 'remote';
-        const ok = remote ? current.connected && current.session?.mihomoReady : system.mihomoReady;
-        const label = remote ? `${current.name} ${current.connected ? (current.session?.mihomoReady ? '在线' : 'Mihomo 未就绪') : '离线'}` : `${probes.length > 1 && current ? `${current.name} · ` : ''}Mihomo ${system.mihomoReady ? '已连接' : '未连接'}`;
+        const current = probes.find(item => item.id === activeProbe?.id) || probes[0];
+        const ok = Boolean(current?.online);
+        const label = current ? `${probes.length > 1 ? `${current.name} · ` : ''}miaospeed ${ok ? '在线' : '离线'}${current.version ? ` ${current.version}` : ''}` : 'miaospeed 未配置';
         return <div className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className={`size-1.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-red-500'}`} />{label}</div>;
       })()}</div></div>
       <div className="flex items-center gap-2">
         <Tooltip content="重新拉取来源"><Button size="icon" variant="outline" aria-label="重新拉取来源" onClick={reload} disabled={Boolean(busy)}>{busy === 'reload' ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}</Button></Tooltip>
         <Button variant="outline" onClick={healthCheck} disabled={Boolean(busy)}>{busy === 'health' ? <LoaderCircle className="animate-spin" /> : <Gauge />}<span className="hidden sm:inline">检测延迟</span></Button>
-        <Button onClick={mediaCheck} disabled={Boolean(busy) || mediaJob?.status === 'running'}>{mediaJob?.status === 'running' ? <LoaderCircle className="animate-spin" /> : <Play />}<span className="hidden sm:inline">流媒体检测</span>{selected.size > 0 && <Badge className="bg-zinc-700 text-white ring-0">{selected.size}</Badge>}</Button>
+        <Button onClick={mediaCheck} disabled={Boolean(busy) || mediaJob?.status === 'running'}>{mediaJob?.status === 'running' ? <LoaderCircle className="animate-spin" /> : <Play />}<span className="hidden sm:inline">解锁检测</span>{selected.size > 0 && <Badge className="bg-zinc-700 text-white ring-0">{selected.size}</Badge>}</Button>
         {auth.authEnabled && <Tooltip content={`退出 ${auth.username || ''}`}><Button size="icon" variant="ghost" aria-label="退出登录" onClick={logout}><LogOut /></Button></Tooltip>}
       </div>
     </div></header>
@@ -722,13 +692,13 @@ function App() {
         <TabsList><TabsTrigger value="nodes"><Server className="mr-1.5 size-3.5" />节点</TabsTrigger><TabsTrigger value="sources"><Globe2 className="mr-1.5 size-3.5" />来源</TabsTrigger><TabsTrigger value="deep"><Zap className="mr-1.5 size-3.5" />深度测试</TabsTrigger><TabsTrigger value="report"><FileImage className="mr-1.5 size-3.5" />报告</TabsTrigger><TabsTrigger value="settings"><Settings2 className="mr-1.5 size-3.5" />设置</TabsTrigger></TabsList>
         <TabsContent value="nodes">
           <div className="mb-4 flex flex-wrap items-center gap-2">
-            {probes.length > 1 && <div className="relative"><select aria-label="探针" className="h-9 min-w-36 appearance-none rounded-md border bg-background pl-3 pr-8 text-sm font-medium outline-none focus:ring-2 focus:ring-ring" value={activeProbe?.id || ''} onChange={e => { chooseProbe(e.target.value); setSelected(new Set()); }}>{probes.map(item => <option key={item.id} value={item.id}>{item.name}{item.type === 'remote' && !item.connected ? '（离线）' : ''}</option>)}</select><ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 size-4 text-muted-foreground" /></div>}
+            {probes.length > 1 && <div className="relative"><select aria-label="探针" className="h-9 min-w-36 appearance-none rounded-md border bg-background pl-3 pr-8 text-sm font-medium outline-none focus:ring-2 focus:ring-ring" value={activeProbe?.id || ''} onChange={e => { chooseProbe(e.target.value); setSelected(new Set()); }}>{probes.filter(item => item.enabled).map(item => <option key={item.id} value={item.id}>{item.name}{!item.online ? '（离线）' : ''}</option>)}</select><ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 size-4 text-muted-foreground" /></div>}
             <div className="relative min-w-56 flex-1 sm:max-w-sm"><Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input className="pl-9" value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索节点、地址或协议" /></div>
             <div className="relative"><select className="h-9 min-w-36 appearance-none rounded-md border bg-background pl-3 pr-8 text-sm outline-none focus:ring-2 focus:ring-ring" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}><option value="all">全部来源</option>{sources.map(source => <option key={source}>{source}</option>)}</select><ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 size-4 text-muted-foreground" /></div>
             <div className="relative"><select className="h-9 appearance-none rounded-md border bg-background pl-3 pr-8 text-sm outline-none focus:ring-2 focus:ring-ring" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option value="all">全部状态</option><option value="online">在线</option><option value="offline">离线</option><option value="pending">待检测</option></select><ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 size-4 text-muted-foreground" /></div>
             <span className="ml-auto text-xs text-muted-foreground">显示 {filtered.length} / {nodes.length}</span>
           </div>
-          <NodeTable nodes={filtered} selected={selected} onSelect={select} onDelete={exclude} />
+          <NodeTable nodes={filtered} columns={system.unlock?.columns || []} selected={selected} onSelect={select} onDelete={exclude} />
         </TabsContent>
         <TabsContent value="sources"><SourcesView subscriptions={subscriptions} imports={imports} sourceStatus={system.sourceStatus || []} reload={load} notify={notify} /></TabsContent>
         <TabsContent value="deep"><DeepTestView subscriptions={subscriptions} imports={imports} notify={notify} /></TabsContent>

@@ -2,29 +2,11 @@
 //  - latency / speed: one row per node with colour-scaled latency and speed cells, a per-second
 //    speed sparkline and the UDP NAT type;
 //  - topology: entry analysis (grouped by entry IP) and exit analysis (nodes clustered by exit IP).
-const sharp = require('sharp');
 const svg = require('./render/svg');
-
-const ROW = 40;
-const FONT = 16;
-const BORDER = '#e5e7eb';
-const HEAD_FILL = '#f3f4f6';
-const MUTED = '#6b7280';
-const INK = '#1f2937';
-
-const PROTOCOLS = {
-  ss: 'Shadowsocks', ssr: 'ShadowsocksR', vmess: 'VMess', vless: 'VLESS', trojan: 'Trojan',
-  hysteria: 'Hysteria', hysteria2: 'Hysteria2', tuic: 'TUIC', wireguard: 'WireGuard', anytls: 'AnyTLS',
-  socks5: 'SOCKS5', http: 'HTTP', snell: 'Snell', ssh: 'SSH', mieru: 'Mieru'
-};
-
-// Latency (ms): pale for fast, deep teal for slow; 0 means the test failed.
-const LATENCY_SCALE = [[50, '#d5f8ef'], [100, '#b4f2e2'], [200, '#94ebd6'], [300, '#72e0c8'], [500, '#4fd3b8'], [800, '#33c3a6'], [Infinity, '#1fae92']];
-// Speed (Mbps): pale blue for slow, through blue to cyan for fast.
-const SPEED_SCALE = [[1, '#eef3fb'], [10, '#e2ecfb'], [50, '#c7dbf8'], [100, '#a9c8f6'], [200, '#86b1f3'], [300, '#6aa3f2'], [500, '#4f9df0'], [800, '#38b7ee'], [Infinity, '#22d0ea']];
-const FAILED_FILL = '#f6f8fa';
-
-const pick = (scale, value) => scale.find(([limit]) => value <= limit)[1];
+const {
+  ROW, FONT, BORDER, MUTED, INK, FAILED_FILL, SPEED_SCALE, pick, protocolLabel, cell, nameCell, latencyCell,
+  header, verticals, rowLine, title, footer, nameWidth, toPng, formatTime
+} = require('./render/table');
 
 function formatSpeed(bytesPerSecond) {
   const bits = Number(bytesPerSecond || 0) * 8;
@@ -41,36 +23,6 @@ function formatBytes(bytes) {
   return `${Math.round(value / 1024)}KB`;
 }
 
-function formatTime(iso) {
-  return new Date(iso).toLocaleString('zh-CN', { hour12: false });
-}
-
-const protocolLabel = value => PROTOCOLS[String(value || '').toLowerCase()] || String(value || '-').toUpperCase();
-
-// Background + centred text for one cell.
-function cell(x, y, width, value, { fill = null, color = INK, anchor = 'middle', size = FONT } = {}) {
-  const tx = anchor === 'middle' ? x + width / 2 : x + 12;
-  return `${fill ? svg.rect(x, y, width, ROW, fill) : ''}${svg.text(tx, y + ROW / 2, value, { size, color, anchor })}`;
-}
-
-// Node name with its flag drawn as an image (names keep any flag they carry in the subscription).
-function nameCell(x, y, width, name, { region = null } = {}) {
-  const { flag, text } = svg.splitFlag(name);
-  const code = flag || null;
-  const iconSize = 22;
-  let out = '';
-  let tx = x + 12;
-  if (code && svg.hasFlag(code)) {
-    out += svg.flag(code, tx, y + (ROW - iconSize) / 2, iconSize);
-    tx += iconSize + 8;
-  } else if (!flag && region && svg.hasFlag(region)) {
-    out += svg.flag(region, tx, y + (ROW - iconSize) / 2, iconSize);
-    tx += iconSize + 8;
-  }
-  out += svg.text(tx, y + ROW / 2, svg.truncate(text || name, x + width - tx - 10, FONT), { size: FONT, color: INK });
-  return out;
-}
-
 function sparkline(x, y, width, speeds, globalMax) {
   if (!speeds?.length || !globalMax) return '';
   const pad = 6;
@@ -85,20 +37,6 @@ function sparkline(x, y, width, speeds, globalMax) {
       Math.max(1, Math.round((barWidth - 0.6) * 10) / 10), Math.round(height * 10) / 10, pick(SPEED_SCALE, mbps));
   });
   return out;
-}
-
-function footer(lines, y, width) {
-  let out = svg.rect(0, y, width, lines.length * 30 + 12, '#f8fafc');
-  lines.forEach((line, index) => {
-    out += svg.text(16, y + 21 + index * 30, svg.truncate(line, width - 32, 15), { size: 15, color: '#374151' });
-  });
-  return { body: out, height: lines.length * 30 + 12 };
-}
-
-async function toPng(document, width, height) {
-  // 2x for crisp text unless the image would exceed librsvg's size limits.
-  const density = height * 2 < 30000 && width * 2 < 30000 ? 144 : 72;
-  return sharp(Buffer.from(document), { density, limitInputPixels: false }).png({ compressionLevel: 9 }).toBuffer();
 }
 
 function sortRows(rows, sort) {
@@ -120,10 +58,9 @@ function filterLabel(filter = {}) {
 async function renderSpeed(job, { appVersion = '', sort = null } = {}) {
   const speed = job.preset === 'speed';
   const rows = sortRows(job.nodes.map((node, index) => ({ node, index, result: job.results[node.id] })), sort);
-  const nameWidth = Math.min(460, Math.max(240, ...rows.map(row => svg.textWidth(svg.splitFlag(row.node.name).text, FONT) + 64)));
   const columns = [
     { key: 'index', label: '序号', width: 64 },
-    { key: 'name', label: '节点名称', width: Math.round(nameWidth) },
+    { key: 'name', label: '节点名称', width: nameWidth(rows.map(row => row.node.name)) },
     { key: 'type', label: '类型', width: 150 },
     { key: 'rtt', label: '延迟RTT', width: 120 },
     { key: 'http', label: 'HTTP延迟', width: 120 },
@@ -136,16 +73,10 @@ async function renderSpeed(job, { appVersion = '', sort = null } = {}) {
   ];
   const width = columns.reduce((sum, column) => sum + column.width, 0);
   const globalMax = Math.max(0, ...rows.flatMap(row => row.result?.speeds || []));
-  const title = `Node Watcher ${speed ? '测速' : '延迟测试'}${speed ? ` - ${job.options.downloadThreading > 1 ? `${job.options.downloadThreading}线程` : '单线程'}测速` : ''} | ${job.backend.name}`;
-  let body = svg.rect(0, 0, width, 44, '#f8fafc') + svg.text(width / 2, 22, title, { size: 18, anchor: 'middle', color: INK, weight: 600 });
-  let y = 44;
+  const heading = `Node Watcher ${speed ? '测速' : '延迟测试'}${speed ? ` - ${job.options.downloadThreading > 1 ? `${job.options.downloadThreading}线程` : '单线程'}测速` : ''} | ${job.backend.name}`;
+  let body = title(width, heading) + header(columns, 44, width);
+  let y = 44 + ROW;
   let x = 0;
-  body += svg.rect(0, y, width, ROW, HEAD_FILL);
-  for (const column of columns) {
-    body += svg.text(x + column.width / 2, y + ROW / 2, column.label, { size: FONT, anchor: 'middle', color: INK, weight: 600 });
-    x += column.width;
-  }
-  y += ROW;
   rows.forEach((row, position) => {
     const result = row.result;
     x = 0;
@@ -156,12 +87,7 @@ async function renderSpeed(job, { appVersion = '', sort = null } = {}) {
         case 'name': body += nameCell(x, y, w, row.node.name, { region: row.node.region }); break;
         case 'type': body += cell(x, y, w, protocolLabel(row.node.protocol)); break;
         case 'rtt':
-        case 'http': {
-          const value = result?.[column.key];
-          if (value == null) body += cell(x, y, w, '-', { color: MUTED });
-          else body += cell(x, y, w, `${value}ms`, { fill: value > 0 ? pick(LATENCY_SCALE, value) : FAILED_FILL, color: value > 0 ? INK : MUTED });
-          break;
-        }
+        case 'http': body += latencyCell(x, y, w, result?.[column.key]); break;
         case 'avg':
         case 'max': {
           const value = result?.[column.key === 'avg' ? 'avgSpeed' : 'maxSpeed'];
@@ -175,15 +101,10 @@ async function renderSpeed(job, { appVersion = '', sort = null } = {}) {
       }
       x += w;
     }
-    body += `<line x1="0" y1="${y + ROW}" x2="${width}" y2="${y + ROW}" stroke="${BORDER}"/>`;
+    body += rowLine(y + ROW, width);
     y += ROW;
   });
-  // Vertical separators
-  x = 0;
-  for (const column of columns.slice(0, -1)) {
-    x += column.width;
-    body += `<line x1="${x}" y1="44" x2="${x}" y2="${y}" stroke="${BORDER}"/>`;
-  }
+  body += verticals(columns, 44, y);
   const seconds = Math.round((job.durationMs || 0) / 1000);
   const backend = `${job.backend.name}${job.version ? `(${job.version})` : ''}`;
   const parts = [`版本=${appVersion}`, `后端=${backend}`];
@@ -242,14 +163,14 @@ async function renderTopology(job, { appVersion = '' } = {}) {
   const topo = buildTopology(job);
   const orgWidth = Math.min(520, Math.max(260, ...topo.entries.map(entry => svg.textWidth(entry.info.org, FONT) + 30),
     ...topo.clusters.map(cluster => svg.textWidth(cluster.info?.org || '', FONT) + 30)));
-  const nameWidth = Math.min(420, Math.max(240, ...job.nodes.map(node => svg.textWidth(svg.splitFlag(node.name).text, FONT) + 64)));
+  const nodeNameWidth = nameWidth(job.nodes.map(node => node.name), { max: 420 });
   const entryColumns = [
     { label: '序号', width: 64 }, { label: '地区', width: 80 }, { label: 'AS编号', width: 120 },
     { label: '组织', width: Math.round(orgWidth) }, { label: '栈', width: 90 }, { label: '入口IP段', width: 170 }, { label: '出口数量', width: 120 }
   ];
   const exitColumns = [
     { label: '序号', width: 64 }, { label: '入口', width: 64 }, { label: '地区', width: 80 }, { label: 'AS编号', width: 120 },
-    { label: '组织', width: Math.round(orgWidth) }, { label: '簇', width: 60 }, { label: '节点名称', width: Math.round(nameWidth) }
+    { label: '组织', width: Math.round(orgWidth) }, { label: '簇', width: 60 }, { label: '节点名称', width: nodeNameWidth }
   ];
   const width = Math.max(entryColumns.reduce((s, c) => s + c.width, 0), exitColumns.reduce((s, c) => s + c.width, 0));
   // Stretch the organisation column so both tables share the full width.
@@ -257,28 +178,9 @@ async function renderTopology(job, { appVersion = '' } = {}) {
   fit(entryColumns);
   fit(exitColumns);
 
-  const header = (columns, y) => {
-    let out = svg.rect(0, y, width, ROW, HEAD_FILL);
-    let x = 0;
-    for (const column of columns) {
-      out += svg.text(x + column.width / 2, y + ROW / 2, column.label, { size: FONT, anchor: 'middle', color: INK, weight: 600 });
-      x += column.width;
-    }
-    return out;
-  };
-  const verticals = (columns, top, bottom) => {
-    let out = '';
-    let x = 0;
-    for (const column of columns.slice(0, -1)) {
-      x += column.width;
-      out += `<line x1="${x}" y1="${top}" x2="${x}" y2="${bottom}" stroke="${BORDER}"/>`;
-    }
-    return out;
-  };
-
-  let body = svg.rect(0, 0, width, 44, '#f8fafc') + svg.text(width / 2, 22, `Node Watcher - 节点拓扑分析 | ${job.backend.name}`, { size: 18, anchor: 'middle', weight: 600 });
+  let body = title(width, `Node Watcher - 节点拓扑分析 | ${job.backend.name}`);
   let y = 44;
-  body += header(entryColumns, y);
+  body += header(entryColumns, y, width);
   y += ROW;
   const entryTop = y;
   for (const entry of topo.entries) {
@@ -292,7 +194,7 @@ async function renderTopology(job, { appVersion = '' } = {}) {
         : cell(x, y, column.width, value, { color: index === 0 ? MUTED : INK });
       x += column.width;
     });
-    body += `<line x1="0" y1="${y + ROW}" x2="${width}" y2="${y + ROW}" stroke="${BORDER}"/>`;
+    body += rowLine(y + ROW, width);
     y += ROW;
   }
   if (topo.entries.length === 0) {
@@ -303,7 +205,7 @@ async function renderTopology(job, { appVersion = '' } = {}) {
 
   body += svg.rect(0, y, width, ROW, '#f8fafc') + svg.text(width / 2, y + ROW / 2, '出口分析', { size: FONT, anchor: 'middle', weight: 600 });
   y += ROW;
-  body += header(exitColumns, y);
+  body += header(exitColumns, y, width);
   y += ROW;
   const exitTop = y;
   const xs = [];
