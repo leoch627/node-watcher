@@ -23,12 +23,17 @@ const logger = winston.createLogger({
   ]
 });
 
-if (process.env.NODE_ENV !== 'production') {
+// Always log to the console as well, so `docker logs` / `docker compose logs` show what happened
+// (the deploy script reads them to explain failures). Colours only outside production.
+// LOG_CONSOLE=false turns this off.
+if (process.env.LOG_CONSOLE !== 'false') {
   logger.add(new winston.transports.Console({
-    format: winston.format.combine(
-      winston.format.colorize(),
-      winston.format.simple()
-    )
+    format: process.env.NODE_ENV === 'production'
+      ? winston.format.combine(
+        winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+        winston.format.printf(({ timestamp, level, message }) => `${timestamp} ${level}: ${message}`)
+      )
+      : winston.format.combine(winston.format.colorize(), winston.format.simple())
   }));
 }
 

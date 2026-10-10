@@ -17,7 +17,7 @@ function createDeployment(context, options = {}) {
   const callsFile = path.join(temporary, 'docker-calls.jsonl');
   fs.mkdirSync(binaries);
   fs.mkdirSync(directory);
-  for (const command of ['bash', 'sh', 'awk', 'openssl', 'mktemp', 'mkdir', 'touch', 'chmod', 'mv', 'rm', 'cat', 'jq', 'cp']) {
+  for (const command of ['bash', 'sh', 'awk', 'openssl', 'mktemp', 'mkdir', 'touch', 'chmod', 'mv', 'rm', 'cat', 'jq', 'cp', 'tail']) {
     const resolved = spawnSync('/bin/sh', ['-c', `command -v ${command}`], { encoding: 'utf8' }).stdout.trim();
     fs.symlinkSync(resolved, path.join(binaries, command));
   }
@@ -478,4 +478,114 @@ test('previous default GHCR image switches to 1ms while custom tags stay pinned'
     assert.equal(result.status, 0, result.stderr);
     assert.equal(deployment.config().NODE_WATCHER_IMAGE, image.endsWith(':latest') ? 'ghcr.1ms.run/leoch627/node-watcher:latest' : image);
   }
+});
+
+// ---- distributed probes ----------------------------------------------------------------------
+const sampleJoin = `nwp://p-1a2b3c4d:${'A'.repeat(20)}_-x${'b'.repeat(9)}@203.0.113.7:7443?fp=${'ab'.repeat(32)}`;
+const loadCompose = deployment => yaml.load(fs.readFileSync(path.join(deployment.directory, 'compose.deploy.yml'), 'utf8'));
+
+test('master: --probe-port publishes the probe listener and --no-probes removes it again', context => {
+  const deployment = createDeployment(context);
+  let result = deployment.run({}, ['-d', deployment.directory, '--probe-port', '7443', '--public-host', 'watch.example.com']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(deployment.config().PROBE_PORT, '7443');
+  assert.equal(deployment.config().PROBE_PUBLIC_HOST, 'watch.example.com');
+  let service = loadCompose(deployment).services['node-watcher'];
+  assert.ok(service.ports.includes('${PROBE_PORT}:${PROBE_PORT}'));
+  assert.equal(service.environment.PROBE_PORT, '${PROBE_PORT}');
+  assert.match(result.stdout, /探针端口：TCP 7443/);
+  assert.doesNotMatch(result.stdout, /--public-host 公网IP/, 'no hint once a public host is set');
+
+  result = deployment.run({}, ['-d', deployment.directory]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(deployment.config().PROBE_PORT, '7443', 'kept on update');
+
+  result = deployment.run({}, ['-d', deployment.directory, '--no-probes']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(deployment.config().PROBE_PORT, '');
+  service = loadCompose(deployment).services['node-watcher'];
+  assert.equal(service.ports.length, 1);
+  assert.equal(service.environment.PROBE_PORT, undefined);
+});
+
+test('master: the probe port must differ from the panel port and be free', context => {
+  const deployment = createDeployment(context);
+  let result = deployment.run({}, ['-d', deployment.directory, '-p', '8080', '--probe-port', '8080']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /探针端口不能与面板端口相同/);
+  result = deployment.run({ MOCK_BUSY_PORTS: '7443' }, ['-d', deployment.directory, '-p', '8080', '--probe-port', '7443']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /7443 已被占用/);
+  result = deployment.run({}, ['-d', deployment.directory, '--probe-port', '70000']);
+  assert.notEqual(result.status, 0);
+  result = deployment.run({}, ['-d', deployment.directory, '--public-host', 'http://example.com:3000']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--public-host/);
+  result = deployment.run({}, ['-d', deployment.directory, '--join', sampleJoin]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--join 只用于探针/);
+});
+
+test('probe: deploys an outbound-only agent container and keeps the join string on update', context => {
+  const deployment = createDeployment(context);
+  let result = deployment.run({}, ['probe', '--join', sampleJoin, '-d', deployment.directory]);
+  assert.equal(result.status, 0, result.stderr);
+  const config = deployment.config();
+  assert.equal(config.NODE_WATCHER_JOIN, sampleJoin);
+  assert.equal(config.AUTH_PASSWORD, undefined, 'a probe has no login');
+  assert.equal(config.NODE_WATCHER_IMAGE, 'ghcr.1ms.run/leoch627/node-watcher:latest');
+  assert.equal(fs.statSync(path.join(deployment.directory, '.env')).mode & 0o777, 0o600);
+  const compose = loadCompose(deployment);
+  assert.deepEqual(Object.keys(compose.services), ['node-watcher-probe']);
+  const service = compose.services['node-watcher-probe'];
+  assert.equal(service.ports, undefined, 'a probe publishes no ports');
+  assert.equal(service.environment.NODE_WATCHER_MODE, 'agent');
+  assert.equal(service.environment.NODE_WATCHER_JOIN, '${NODE_WATCHER_JOIN:?NODE_WATCHER_JOIN must not be empty}');
+  const composeCalls = deployment.calls().filter(args => args[0] === 'compose');
+  assert.ok(composeCalls.some(args => args.includes('node-watcher-probe') && args.includes('pull')));
+  assert.ok(composeCalls.some(args => args.includes('node-watcher-probe') && args.includes('up')));
+  assert.ok(deployment.calls().some(args => args[0] === 'inspect' && args.includes('node-watcher-probe')));
+  assert.match(result.stdout, /已连接主控 203\.0\.113\.7:7443/);
+
+  result = deployment.run({}, ['probe', '-d', deployment.directory]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(deployment.config().NODE_WATCHER_JOIN, sampleJoin);
+});
+
+test('probe: missing or malformed join strings and master-only options are rejected', context => {
+  const deployment = createDeployment(context);
+  let result = deployment.run({}, ['probe', '-d', deployment.directory]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /首次部署探针需要加入串/);
+  for (const join of ['https://example.com', 'nwp://p-1:tok@host', `nwp://p-1:tok@host:7443?fp=xyz`, `nwp://p-1:t'ok@host:7443`]) {
+    result = deployment.run({}, ['probe', '--join', join, '-d', deployment.directory]);
+    assert.notEqual(result.status, 0, join);
+    assert.match(result.stderr, /加入串格式不正确/, join);
+  }
+  result = deployment.run({}, ['probe', '--join', sampleJoin, '-d', deployment.directory, '-p', '8080']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /probe 子命令只支持/);
+  result = deployment.run({}, ['probe', '--join', sampleJoin, '-d', deployment.directory, '--probe-port', '7443']);
+  assert.notEqual(result.status, 0);
+});
+
+test('probe: explains why it cannot reach the master and leaves the container retrying', context => {
+  const deployment = createDeployment(context);
+  fs.mkdirSync(path.join(deployment.directory, 'logs'), { recursive: true });
+  fs.writeFileSync(path.join(deployment.directory, 'logs', 'combined.log'),
+    '{"level":"warn","message":"Master connection error: connect ECONNREFUSED 203.0.113.7:7443"}\n');
+  const result = deployment.run({ MOCK_HEALTH: 'running starting' }, ['probe', '--join', sampleJoin, '-d', deployment.directory]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /暂未连上主控（容器会持续自动重试）/);
+  assert.match(result.stderr, /连不上主控 203\.0\.113\.7:7443/);
+  assert.equal(deployment.config().NODE_WATCHER_JOIN, sampleJoin, 'configuration kept for the next attempt');
+});
+
+test('probe: the join string round-trips through real Compose interpolation', { skip: !process.env.TEST_COMPOSE_BINARY }, context => {
+  const deployment = createDeployment(context);
+  const result = deployment.run({}, ['probe', '--join', sampleJoin, '-d', deployment.directory]);
+  assert.equal(result.status, 0, result.stderr);
+  const config = spawnSync(process.env.TEST_COMPOSE_BINARY, ['--env-file', path.join(deployment.directory, '.env'), '-f', path.join(deployment.directory, 'compose.deploy.yml'), 'config', '--environment'], { encoding: 'utf8' });
+  assert.equal(config.status, 0, config.stderr);
+  assert.equal(config.stdout.split('\n').find(line => line.startsWith('NODE_WATCHER_JOIN=')), `NODE_WATCHER_JOIN=${sampleJoin}`);
 });

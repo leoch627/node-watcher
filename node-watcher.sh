@@ -9,35 +9,54 @@ fail() {
 
 usage() {
   cat <<'HELP'
-用法：bash node-watcher.sh [install|update] [选项]
+用法：bash node-watcher.sh [install|update] [选项]          部署 / 更新主控（面板）
       bash node-watcher.sh [部署目录 [端口 [用户名 [密码]]]]
-  -d, --dir PATH       部署目录，默认 /opt/node-watcher
-  -p, --port PORT      对外端口（1-65535），首次默认随机选择 1000-10000
-  -u, --username USER  登录用户名，默认 admin
-  -P, --password PASS  登录密码，首次默认随机生成
-      --no-install    不自动安装依赖（适合已配置 Docker 的 NAS）
-  -h, --help          显示帮助
-无参数直接安装。重复运行会更新镜像，只有显式传入的设置会覆盖已有值。
-示例：bash node-watcher.sh -d /opt/node-watcher -p 8080 -u admin -P 'My$Password!'
+      bash node-watcher.sh probe --join 'nwp://...' [选项]    部署 / 更新探针
+主控选项：
+  -d, --dir PATH         部署目录，默认 /opt/node-watcher
+  -p, --port PORT        面板对外端口（1-65535），首次默认随机选择 1000-10000
+  -u, --username USER    登录用户名，默认 admin
+  -P, --password PASS    登录密码，首次默认随机生成
+      --probe-port PORT  开启分布式探针，探针通过此 TCP 端口连接主控（常用 7443）
+      --public-host HOST 写进探针加入串的主控地址（公网 IP 或域名），默认用打开面板时的地址
+      --no-probes        关闭探针端口映射
+探针选项（probe 子命令）：
+      --join JOIN        主控面板「设置 → 探针」生成的加入串；更新时可省略，沿用已保存的值
+  -d, --dir PATH         部署目录，默认 /opt/node-watcher-probe
+通用选项：
+      --no-install       不自动安装依赖（适合已配置 Docker 的 NAS）
+  -h, --help             显示帮助
+无参数直接安装主控。重复运行会更新镜像，只有显式传入的设置会覆盖已有值。
+示例：bash node-watcher.sh -d /opt/node-watcher -p 8080 -u admin -P 'My$Password!' --probe-port 7443
+      bash node-watcher.sh probe --join 'nwp://p-1a2b3c4d:...@203.0.113.7:7443?fp=...'
 支持 Linux x86_64 / ARM64；缺少依赖时自动安装，需要 root 或 sudo。
 默认国内加速：GitHub 使用 ghfast.top，Docker CE 使用清华源，镜像使用毫秒镜像 1ms.run。
 HELP
 }
 
 original_args=("$@")
-deploy_dir=/opt/node-watcher
+mode=master
+deploy_dir=''
 port_override=''
 username_override=''
 password_override=''
+probe_port_override=''
+public_host_override=''
+join_override=''
+disable_probes=false
 auto_install=true
 positional=0
 named_options=false
-[[ "${1:-}" != install && "${1:-}" != update ]] || shift
+case "${1:-}" in
+  install|update) shift ;;
+  probe) mode=probe; shift ;;
+esac
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
     --no-install) auto_install=false; shift ;;
-    -d|--dir|-p|--port|-u|--username|-P|--password|--dir=*|--port=*|--username=*|--password=*)
+    --no-probes) disable_probes=true; named_options=true; shift ;;
+    -d|--dir|-p|--port|-u|--username|-P|--password|--probe-port|--public-host|--join|--dir=*|--port=*|--username=*|--password=*|--probe-port=*|--public-host=*|--join=*)
       [[ $positional -eq 0 ]] || fail '请勿混用位置参数与命名参数。'
       named_options=true
       option=${1%%=*}
@@ -53,6 +72,9 @@ while [[ $# -gt 0 ]]; do
         -p|--port) port_override=$value ;;
         -u|--username) username_override=$value ;;
         -P|--password) password_override=$value ;;
+        --probe-port) probe_port_override=$value ;;
+        --public-host) public_host_override=$value ;;
+        --join) join_override=$value ;;
       esac
       ;;
     -*) fail "未知选项：$1；使用 --help 查看用法。" ;;
@@ -60,17 +82,42 @@ while [[ $# -gt 0 ]]; do
       [[ "$named_options" == false ]] || fail '请勿混用位置参数与命名参数。'
       [[ -n "$1" && "$1" != *$'\n'* && "$1" != *$'\r'* ]] || fail '参数不能是空值或包含换行。'
       positional=$((positional + 1))
-      case "$positional" in
-        1) deploy_dir=$1 ;;
-        2) port_override=$1 ;;
-        3) username_override=$1 ;;
-        4) password_override=$1 ;;
-        *) fail '最多接受部署目录、端口、用户名、密码四个位置参数。' ;;
-      esac
+      if [[ "$mode" == probe ]]; then
+        # probe 子命令只接受一个位置参数：加入串
+        [[ $positional -eq 1 ]] || fail 'probe 子命令只接受一个位置参数（加入串）。'
+        join_override=$1
+      else
+        case "$positional" in
+          1) deploy_dir=$1 ;;
+          2) port_override=$1 ;;
+          3) username_override=$1 ;;
+          4) password_override=$1 ;;
+          *) fail '最多接受部署目录、端口、用户名、密码四个位置参数。' ;;
+        esac
+      fi
       shift
       ;;
   esac
 done
+
+if [[ "$mode" == probe ]]; then
+  [[ -z "$port_override$username_override$password_override$probe_port_override$public_host_override" && "$disable_probes" == false ]] \
+    || fail 'probe 子命令只支持 --join、--dir 和 --no-install；端口、账号和探针端口属于主控设置。'
+  deploy_dir=${deploy_dir:-/opt/node-watcher-probe}
+  if [[ -n "$join_override" ]]; then
+    # nwp://<探针ID>:<token>@<主控地址>:<端口>?fp=<证书指纹>
+    [[ ${#join_override} -le 512 && "$join_override" =~ ^nwp://[A-Za-z0-9._~%-]+:[A-Za-z0-9._~%-]+@(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+):[0-9]{1,5}(\?fp=[0-9a-f]{64})?$ ]] \
+      || fail '加入串格式不正确：请从主控面板「设置 → 探针」完整复制 nwp:// 开头的整段内容（用单引号包住）。'
+  fi
+else
+  [[ -z "$join_override" ]] || fail '--join 只用于探针：bash node-watcher.sh probe --join ...'
+  [[ -z "$probe_port_override" || "$disable_probes" == false ]] || fail '--probe-port 与 --no-probes 不能同时使用。'
+  deploy_dir=${deploy_dir:-/opt/node-watcher}
+  if [[ -n "$public_host_override" ]]; then
+    [[ ${#public_host_override} -le 253 && "$public_host_override" =~ ^(\[[0-9A-Fa-f:.]+\]|[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*|[A-Za-z0-9.-]+)$ ]] \
+      || fail '--public-host 只能是域名或 IP 地址（不含 http:// 和端口）。'
+  fi
+fi
 
 validate_port() {
   [[ "$1" =~ ^[0-9]{1,5}$ ]] || fail '端口必须为 1-65535 的整数。'
@@ -79,6 +126,10 @@ validate_port() {
 if [[ -n "$port_override" ]]; then
   validate_port "$port_override"
   port_override=$((10#$port_override))
+fi
+if [[ -n "$probe_port_override" ]]; then
+  validate_port "$probe_port_override"
+  probe_port_override=$((10#$probe_port_override))
 fi
 [[ "$(uname -s)" == Linux ]] || fail '请在 Linux 服务器、NAS 或树莓派上运行。'
 case "$(uname -m)" in
@@ -301,7 +352,7 @@ setting_missing() {
 set_setting() {
   local key="$1" value="$2"
   # Escape dotenv strings and Compose interpolation, including trailing backslashes.
-  if [[ "$key" == AUTH_USERNAME || "$key" == AUTH_PASSWORD ]]; then
+  if [[ "$key" == AUTH_USERNAME || "$key" == AUTH_PASSWORD || "$key" == NODE_WATCHER_JOIN ]]; then
     value=${value//\\/\\\\}
     value=${value//\"/\\\"}
     value=${value//\$/\$\$}
@@ -359,6 +410,100 @@ port_in_use() {
   '
 }
 
+# ---------------------------------------------------------------------------------------------
+# 探针模式：只连出到主控，不开放端口，不需要账号密码。
+if [[ "$mode" == probe ]]; then
+  [[ -z "$join_override" ]] || set_setting NODE_WATCHER_JOIN "$join_override"
+  setting_missing NODE_WATCHER_JOIN && fail "首次部署探针需要加入串：bash node-watcher.sh probe --join 'nwp://...'（在主控面板「设置 → 探针」添加探针后复制）。"
+  case "$(read_setting NODE_WATCHER_IMAGE)" in
+    ghcr.io/leoch627/node-watcher:latest|'"ghcr.io/leoch627/node-watcher:latest"'|"'ghcr.io/leoch627/node-watcher:latest'")
+      set_setting NODE_WATCHER_IMAGE ghcr.1ms.run/leoch627/node-watcher:latest ;;
+  esac
+  ensure_setting NODE_WATCHER_IMAGE ghcr.1ms.run/leoch627/node-watcher:latest
+  ensure_setting MEDIA_CONCURRENCY 1
+  probe_volume_label=''
+  [[ "$security_options" != *selinux* ]] || probe_volume_label=:Z
+  ensure_setting NODE_WATCHER_VOLUME_LABEL "$probe_volume_label"
+
+  temporary_file=$(mktemp "${deploy_dir}/.compose.XXXXXX")
+  cat > "$temporary_file" <<'PROBE_COMPOSE'
+services:
+  node-watcher-probe:
+    image: ${NODE_WATCHER_IMAGE:-ghcr.1ms.run/leoch627/node-watcher:latest}
+    container_name: node-watcher-probe
+    volumes:
+      - ./data:/app/data${NODE_WATCHER_VOLUME_LABEL:-}
+      - ./logs:/app/logs${NODE_WATCHER_VOLUME_LABEL:-}
+    environment:
+      NODE_ENV: production
+      NODE_WATCHER_MODE: agent
+      NODE_WATCHER_JOIN: ${NODE_WATCHER_JOIN:?NODE_WATCHER_JOIN must not be empty}
+      MEDIA_CONCURRENCY: ${MEDIA_CONCURRENCY:-1}
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+PROBE_COMPOSE
+  mv -- "$temporary_file" compose.deploy.yml
+  temporary_file=''
+
+  unset NODE_WATCHER_IMAGE NODE_WATCHER_JOIN MEDIA_CONCURRENCY NODE_WATCHER_VOLUME_LABEL DOCKER_DEFAULT_PLATFORM
+  compose=("${compose_command[@]}" --project-name node-watcher-probe --env-file "$deploy_dir/.env" -f "$deploy_dir/compose.deploy.yml")
+  "${compose[@]}" config --quiet
+
+  join=$(read_setting NODE_WATCHER_JOIN)
+  join=${join//\"/}
+  master_address=${join#*@}
+  master_address=${master_address%%\?*}
+  printf '部署目录：%s\nDocker 平台：%s\n主控地址：%s\n正在拉取预编译镜像……\n' "$deploy_dir" "$daemon_platform" "$master_address"
+  if ! "${compose[@]}" pull; then
+    fail "镜像拉取失败，未启动或替换容器。请检查毫秒镜像 ghcr.1ms.run 的访问情况；配置已保留在 ${deploy_dir}/.env，可修改 NODE_WATCHER_IMAGE 后重试。"
+  fi
+  mkdir -p data logs
+  chown -R 1000:1000 data logs
+  chmod 700 data logs
+
+  # 健康 = Mihomo 已就绪且已连上主控（容器内 /api/ready）。首次检查约在启动 30 秒后。
+  connected=false
+  container_state=''
+  if "${compose[@]}" up -d --no-build; then
+    for ((attempt = 0; attempt < 75; attempt++)); do
+      container_state=$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' node-watcher-probe) || break
+      case "$container_state" in
+        'running healthy') connected=true; break ;;
+        exited*|dead*) break ;;
+      esac
+      sleep 2
+    done
+  fi
+  if [[ "$connected" != true ]]; then
+    probe_logs=$("${compose[@]}" logs --tail=80 2>&1) || probe_logs=''
+    printf '%s\n' "$probe_logs" >&2
+    # The image also writes logs/combined.log in the mounted directory.
+    [[ ! -f logs/combined.log ]] || probe_logs+=$'\n'$(tail -n 80 logs/combined.log 2>/dev/null || true)
+    case "$probe_logs" in
+      *'fingerprint mismatch'*) hint='证书指纹不符：主控证书已变更，请在面板重置该探针密钥并使用新的加入串。' ;;
+      *'Authentication failed'*) hint='主控拒绝了该探针：加入串的密钥已重置、探针已停用或已删除，请在面板重新生成加入串。' ;;
+      *'same join string'*) hint='另一台机器正在使用同一个加入串；每台探针需要在面板单独添加。' ;;
+      *ECONNREFUSED*|*ETIMEDOUT*|*EHOSTUNREACH*|*ENOTFOUND*|*'No traffic from master'*) hint="连不上主控 ${master_address}：请确认主控已用 --probe-port 开启探针端口，并在主控防火墙 / 云安全组放行该 TCP 端口。" ;;
+      *) hint='请根据上方日志排查；常见原因是主控探针端口未放行或加入串已失效。' ;;
+    esac
+    case "$container_state" in
+      running*) fail "探针已启动，但暂未连上主控（容器会持续自动重试）。${hint}" ;;
+      *) fail "探针启动失败，配置已保留在 ${deploy_dir}/.env。${hint}" ;;
+    esac
+  fi
+
+  "${compose[@]}" ps
+  printf '\n探针部署完成，已连接主控 %s。\n' "$master_address"
+  printf '在主控面板「设置 → 探针」可以看到它在线；节点页切换到该探针即可查看这个网络下的检测结果。\n'
+  printf '配置文件：%s/.env（权限 600，包含探针密钥）\n' "$deploy_dir"
+  printf '更新探针：重新运行 bash node-watcher.sh probe（不带 --join 即沿用已保存的加入串）。\n'
+  printf '查看日志：'
+  printf '%q ' "${compose[@]}"
+  printf 'logs -f --tail=100\n'
+  exit 0
+fi
+
 if [[ -n "$port_override" ]]; then
   old_port=$(read_setting PORT)
   old_port=${old_port//\"/}
@@ -383,6 +528,19 @@ elif setting_missing PORT; then
 fi
 [[ -z "$username_override" ]] || set_setting AUTH_USERNAME "$username_override"
 [[ -z "$password_override" ]] || set_setting AUTH_PASSWORD "$password_override"
+if [[ "$disable_probes" == true ]]; then
+  set_setting PROBE_PORT ''
+elif [[ -n "$probe_port_override" ]]; then
+  current_port=$(read_setting PORT)
+  current_port=${current_port//\"/}
+  [[ "$probe_port_override" != "$current_port" ]] || fail '探针端口不能与面板端口相同。'
+  old_probe_port=$(read_setting PROBE_PORT)
+  if [[ "$probe_port_override" != "$old_probe_port" ]] && port_in_use "$probe_port_override"; then
+    fail "端口 ${probe_port_override} 已被占用，请用 --probe-port 指定其他端口。"
+  fi
+  set_setting PROBE_PORT "$probe_port_override"
+fi
+[[ -z "$public_host_override" ]] || set_setting PROBE_PUBLIC_HOST "$public_host_override"
 
 case "$(read_setting NODE_WATCHER_IMAGE)" in
   ghcr.io/leoch627/node-watcher:latest|'"ghcr.io/leoch627/node-watcher:latest"'|"'ghcr.io/leoch627/node-watcher:latest'")
@@ -506,6 +664,12 @@ else
   printf '登录密码：保留已有密码，可在下方 .env 文件中查看 AUTH_PASSWORD。\n'
 fi
 printf '配置文件：%s/.env（权限 600）\n' "$deploy_dir"
+if [[ "$probe_port" =~ ^[0-9]+$ && "$probe_port" -ge 1 && "$probe_port" -le 65535 ]]; then
+  printf '探针端口：TCP %s 已开放，请同样在防火墙 / 云安全组放行。在面板「设置 → 探针」添加探针，把弹出的一键命令复制到探针机器运行。\n' "$probe_port"
+  if setting_missing PROBE_PUBLIC_HOST; then
+    printf '提示：加入串默认使用你打开面板时的地址；若那是内网地址或经反向代理的域名，请加 --public-host 公网IP或域名 重新运行。\n'
+  fi
+fi
 printf '更新镜像：重新运行本脚本，已有密码和数据不会被重置。\n'
 printf '请在服务器防火墙 / 云安全组中放行上方 TCP 端口；公网访问请将服务器IP换为公网地址。\n'
 printf '查看日志：'

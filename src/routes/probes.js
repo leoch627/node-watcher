@@ -4,6 +4,9 @@ const { formatJoin } = require('../probe/protocol');
 
 const router = express.Router();
 const IMAGE = process.env.PROBE_IMAGE || 'ghcr.io/leoch627/node-watcher:latest';
+// One-click installer (same mirror as the README's master install command).
+const SCRIPT_URL = process.env.PROBE_SCRIPT_URL
+  || 'https://ghfast.top/https://raw.githubusercontent.com/leoch627/node-watcher/main/node-watcher.sh';
 
 function listener() {
   const hub = registry.hub;
@@ -23,6 +26,7 @@ function joinInfo(req, probe, token) {
   const join = formatJoin({ id: probe.id, token, host, port: info.publicPort, fingerprint: info.fingerprint });
   return {
     join,
+    script: `wget -N ${SCRIPT_URL} && bash node-watcher.sh probe --join '${join}'`,
     docker: `docker run -d --name node-watcher-probe --restart unless-stopped -e NODE_WATCHER_MODE=agent -e NODE_WATCHER_JOIN='${join}' ${IMAGE}`,
     node: `NODE_WATCHER_MODE=agent NODE_WATCHER_JOIN='${join}' npm start`
   };

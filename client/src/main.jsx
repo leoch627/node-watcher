@@ -136,7 +136,8 @@ function CopyField({ label, value, notify }) {
 function JoinDetails({ info, notify }) {
   return <div className="grid gap-4">
     <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">加入串包含探针密钥，只显示这一次。每台探针机器使用自己的加入串；丢失后可重置密钥生成新的。</div>
-    <CopyField label="Docker 一键运行" value={info.docker} notify={notify} />
+    <CopyField label="一键部署（推荐，自动安装 Docker 并等待连上主控；需要 root）" value={info.script} notify={notify} />
+    <CopyField label="已有 Docker 时直接运行" value={info.docker} notify={notify} />
     <CopyField label="加入串（docker-compose.probe.yml 的 NODE_WATCHER_JOIN）" value={info.join} notify={notify} />
     <CopyField label="源码运行" value={info.node} notify={notify} />
   </div>;

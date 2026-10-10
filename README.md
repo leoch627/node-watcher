@@ -50,10 +50,13 @@ bash node-watcher.sh /srv/node-watcher 8080 owner 'My$Password!'
 | `-p, --port` | 对外 TCP 端口，接受 1–65535 | 随机 1000–10000 |
 | `-u, --username` | 登录用户名 | `admin` |
 | `-P, --password` | 登录密码 | 36 位随机十六进制密码 |
+| `--probe-port` | 开启分布式探针，探针通过此 TCP 端口连接主控（见「分布式探针」） | 不开启 |
+| `--public-host` | 写进探针加入串的主控公网 IP 或域名 | 打开面板时使用的地址 |
+| `--no-probes` | 关闭探针端口映射 | — |
 | `--no-install` | 禁止自动安装依赖，适合已配置 Docker 的 NAS | 默认自动安装 |
 | `-h, --help` | 查看用法 | — |
 
-也支持 `--port=8080` 形式，以及 `bash node-watcher.sh install ...` / `bash node-watcher.sh update ...`。不带子命令直接安装或更新，不需要回答交互式问题。密码含 `$`、空格等字符时请用 shell 单引号包裹；命令行密码可能进入 shell 历史，不传 `-P` 可使用随机密码。已克隆仓库时，直接运行 `bash node-watcher.sh` 即可。
+也支持 `--port=8080` 形式，以及 `bash node-watcher.sh install ...` / `bash node-watcher.sh update ...`；部署探针用 `bash node-watcher.sh probe --join '...'`（见「分布式探针」）。不带子命令直接安装或更新，不需要回答交互式问题。密码含 `$`、空格等字符时请用 shell 单引号包裹；命令行密码可能进入 shell 历史，不传 `-P` 可使用随机密码。已克隆仓库时，直接运行 `bash node-watcher.sh` 即可。
 
 ### 默认国内加速
 
@@ -339,26 +342,50 @@ Disney+、TikTok、HBO Max 及其他区域项目没有回显客户端 IP 的接�
 
 加入串格式：`nwp://<探针ID>:<token>@<主控地址>:<端口>?fp=<证书指纹>`，相当于密码，**只在创建 / 重置时显示一次**。
 
-### 部署步骤
+### 部署步骤（一键脚本）
 
-1. **主控**按「快速开始」部署，并放行 TCP `7443`（防火墙 + 云安全组）。用一键脚本部署的，在部署目录的 `.env` 里加一行 `PROBE_PORT=7443` 后重新运行脚本，才会映射该端口（默认不映射，避免与已有服务冲突）。如果面板通过域名访问，加入串会自动使用该域名；否则设置 `PROBE_PUBLIC_HOST`（以及端口映射时的 `PROBE_PUBLIC_PORT`）。
-2. 面板「设置 → 探针」输入名称并点「添加探针」，复制弹窗中的命令。
-3. 在目标网络的机器上运行（任选其一）：
+**第 1 步：主控开启探针端口。** 在主控服务器上重新运行一键脚本，加上 `--probe-port`；面板经内网地址或反向代理域名访问时，再用 `--public-host` 指定探针能连到的公网 IP 或域名：
 
-   ```bash
-   # Docker
-   docker run -d --name node-watcher-probe --restart unless-stopped \
-     -e NODE_WATCHER_MODE=agent -e NODE_WATCHER_JOIN='nwp://...' \
-     ghcr.io/leoch627/node-watcher:latest
+```bash
+wget -N https://ghfast.top/https://raw.githubusercontent.com/leoch627/node-watcher/main/node-watcher.sh && bash node-watcher.sh --probe-port 7443 --public-host 203.0.113.7
+```
 
-   # Docker Compose：把 NODE_WATCHER_JOIN 写进 .env
-   docker compose -f docker-compose.probe.yml up -d
+已有的账号、密码、端口和数据都会保留。然后在防火墙 / 云安全组放行 TCP `7443`。
 
-   # 源码（需要 Node.js 22 和 mihomo）
-   NODE_WATCHER_MODE=agent NODE_WATCHER_JOIN='nwp://...' npm start
-   ```
+**第 2 步：添加探针。** 面板「设置 → 探针」输入名称（如「上海电信」），点「添加探针」，复制弹窗里的「一键部署」命令。
 
-4. 探针连上后几秒内自动测一轮，之后跟随主控的检测周期。
+**第 3 步：在目标网络的机器上运行这条命令**（Linux x86_64 / ARM64，root）：
+
+```bash
+wget -N https://ghfast.top/https://raw.githubusercontent.com/leoch627/node-watcher/main/node-watcher.sh && bash node-watcher.sh probe --join 'nwp://...'
+```
+
+脚本会自动安装 Docker、拉取镜像，部署到 `/opt/node-watcher-probe`，并等待探针连上主控；连不上时会根据日志说明原因（端口未放行、证书指纹不符、加入串失效或被另一台机器占用）。探针不开放任何端口。连上后几秒内自动测一轮，之后跟随主控的检测周期。
+
+| 探针脚本参数 | 说明 |
+| --- | --- |
+| `--join JOIN` | 加入串；更新时可省略，沿用 `.env` 中已保存的值 |
+| `-d, --dir PATH` | 部署目录，默认 `/opt/node-watcher-probe` |
+| `--no-install` | 不自动安装依赖 |
+
+更新探针：`bash node-watcher.sh probe`。停止并移除：`docker compose -p node-watcher-probe -f /opt/node-watcher-probe/compose.deploy.yml down`。
+
+不用一键脚本时也可以：
+
+```bash
+# 已有 Docker
+docker run -d --name node-watcher-probe --restart unless-stopped \
+  -e NODE_WATCHER_MODE=agent -e NODE_WATCHER_JOIN='nwp://...' \
+  ghcr.io/leoch627/node-watcher:latest
+
+# Docker Compose：把 NODE_WATCHER_JOIN 写进 .env
+docker compose -f docker-compose.probe.yml up -d
+
+# 源码（需要 Node.js 22 和 mihomo）
+NODE_WATCHER_MODE=agent NODE_WATCHER_JOIN='nwp://...' npm start
+```
+
+手动部署主控时（不用一键脚本），按 `docker-compose.yml` 放行 7443 即可；如果面板通过域名访问，加入串会自动使用该域名，否则设置 `PROBE_PUBLIC_HOST`（以及端口映射时的 `PROBE_PUBLIC_PORT`）。
 
 | 变量（主控） | 默认值 | 说明 |
 | --- | --- | --- |
@@ -427,6 +454,7 @@ Disney+、TikTok、HBO Max 及其他区域项目没有回显客户端 IP 的接�
 | `MIHOMO_SOCKS_PORT` | HTTP 端口 + 1 | `.env.example` 和 Compose 中为 `23334` |
 | `MIHOMO_CONTROLLER_PORT` | HTTP 端口 + 2 | `.env.example` 和 Compose 中为 `23335` |
 | `MIHOMO_SECRET` | `node-watcher-secret` | Mihomo 控制接口密钥 |
+| `LOG_CONSOLE` | `true` | 日志同时输出到控制台（`docker logs` 可见）；设为 `false` 只写 `logs/` 文件 |
 
 ### 登录与访问边界
 
@@ -539,7 +567,7 @@ npm run build     # 前端生产构建
 ### 项目结构
 
 ```text
-node-watcher.sh     一键部署、依赖安装、参数配置、随机端口与镜像更新
+node-watcher.sh     一键部署主控 / 探针、依赖安装、参数配置、随机端口与镜像更新
 client/             React 前端与界面组件
 src/routes/         HTTP API 路由
 src/services/       节点解析、订阅、检测、告警、鉴权与报告
@@ -625,7 +653,7 @@ GHCR 上的 `node-watcher` 镜像包没有授权给当前仓库（常见于删�
 
 **探针一直显示离线？**
 
-在探针机器上查看日志：`Master certificate fingerprint mismatch` 表示加入串里的指纹与主控证书不符（主控重新生成过证书时需重新创建加入串）；`Authentication failed` 表示 token 已被重置或探针已删除；`Another probe connected with the same join string` 表示两台机器用了同一个加入串。连接超时则检查主控的 7443 端口是否放行、`PROBE_PUBLIC_HOST` 是否为探针能访问到的地址。
+在探针机器上查看日志（`docker logs node-watcher-probe`）：`Master certificate fingerprint mismatch` 表示加入串里的指纹与主控证书不符（主控重新生成过证书时需重新创建加入串）；`Authentication failed` 表示 token 已被重置或探针已删除；`Another probe connected with the same join string` 表示两台机器用了同一个加入串。连接超时则检查主控的 7443 端口是否放行、`PROBE_PUBLIC_HOST` 是否为探针能访问到的地址。
 
 ## 许可证与致谢
 
