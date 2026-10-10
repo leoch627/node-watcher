@@ -139,6 +139,7 @@ function ConnectDetails({ info, notify }) {
   return <div className="grid gap-4">
     <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">token 只显示这一次。每台机器运行一个 miaospeed，主动连接主控，自身不需要开放端口；丢失 token 后可重置。</div>
     {!info.secure && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">当前地址是不加密的 ws://，测试任务里包含节点密码，只建议在局域网使用。公网请让主控通过 HTTPS 访问（域名 + Let's Encrypt 证书），或设置 MIAOSPEED_PUBLIC_URL=wss://你的域名。</div>}
+    <CopyField label="一键部署（推荐，自动安装 Docker；需要 root）" value={info.script} notify={notify} />
     <CopyField label="Docker（支持 amd64 / arm64 / 树莓派 armv7）" value={info.docker} notify={notify} />
     <CopyField label="Linux / macOS 二进制" value={info.binary} notify={notify} />
     <CopyField label="Windows" value={info.windows} notify={notify} />

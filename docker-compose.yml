@@ -6,9 +6,13 @@ services:
     container_name: node-watcher
     ports:
       - "3000:3000"
-      # TLS listener for remote probes. To disable probes, delete this line (the listener is then
-      # unreachable from outside the container). PROBE_HOST_PORT changes the published host port.
-      - "${PROBE_HOST_PORT:-7443}:7443"
+      # Built-in HTTPS (the one-click installer sets all of this up with --domain, including a
+      # Let's Encrypt certificate that renews itself). For a manual setup: publish 80 -> 3000 and
+      # 443 -> 3443 instead of the line above, uncomment the HTTPS variables below and put the
+      # certificate into data/tls/ (fullchain.pem + key.pem), e.g. issued by acme.sh / certbot in
+      # webroot mode with ./data/acme as the webroot.
+      # - "80:3000"
+      # - "443:3443"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -21,18 +25,25 @@ services:
       AUTH_SESSION_TTL_HOURS: ${AUTH_SESSION_TTL_HOURS:-24}
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
       TRUST_PROXY: ${TRUST_PROXY:-0}
-      MIHOMO_HTTP_PORT: ${MIHOMO_HTTP_PORT:-23333}
-      MIHOMO_SOCKS_PORT: ${MIHOMO_SOCKS_PORT:-23334}
-      MIHOMO_CONTROLLER_PORT: ${MIHOMO_CONTROLLER_PORT:-23335}
-      MIHOMO_SECRET: ${MIHOMO_SECRET:-node-watcher-secret}
-      PROBE_PORT: 7443
-      PROBE_PUBLIC_HOST: ${PROBE_PUBLIC_HOST:-}
-      PROBE_PUBLIC_PORT: ${PROBE_PUBLIC_PORT:-${PROBE_HOST_PORT:-7443}}
-      LOCAL_PROBE: ${LOCAL_PROBE:-true}
+      # miaospeed backends: the local engine (set false for a master that only uses remote
+      # backends), its display name, and optional GeoIP mmdb files for topology tests.
+      MIAOSPEED_LOCAL: ${MIAOSPEED_LOCAL:-true}
       LOCAL_PROBE_NAME: ${LOCAL_PROBE_NAME:-}
-      # miaospeed backends: address reverse backends dial (wss://your-domain) and optional GeoIP mmdb files
-      MIAOSPEED_PUBLIC_URL: ${MIAOSPEED_PUBLIC_URL:-}
       MIAOSPEED_MMDB: ${MIAOSPEED_MMDB:-}
+      # Address reverse backends dial, e.g. wss://monitor.example.com. Set it when the dashboard is
+      # served over HTTPS by your own reverse proxy (it must forward websocket upgrades on
+      # /miaospeed/reverse/), or with the built-in HTTPS below.
+      MIAOSPEED_PUBLIC_URL: ${MIAOSPEED_PUBLIC_URL:-}
+      # Built-in HTTPS (see the ports above); also set AUTH_COOKIE_SECURE=true and
+      # MIAOSPEED_PUBLIC_URL=wss://<domain> in .env. HTTPS starts once both certificate files exist
+      # and they are reloaded when renewed. HTTPS_PUBLIC_PORT is only needed when the published
+      # HTTPS port is not 443 (it is used in redirects).
+      # HTTPS_PORT: 3443
+      # TLS_CERT_FILE: /app/data/tls/fullchain.pem
+      # TLS_KEY_FILE: /app/data/tls/key.pem
+      # ACME_WEBROOT: /app/data/acme
+      # HTTPS_REDIRECT: "true"
+      # HTTPS_PUBLIC_PORT: 443
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped

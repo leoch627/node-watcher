@@ -23,10 +23,23 @@ const backendsRouter = require('./routes/backends');
 const deepTestsRouter = require('./routes/deepTests');
 const unlockRouter = require('./routes/unlock');
 const miaospeedBackends = require('./miaospeed/backends');
+const { httpsConfigFromEnv, createHttpsListener, acmeChallenge, httpsRedirect } = require('./utils/https');
 
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', process.env.TRUST_PROXY === '1' ? 1 : false);
+
+// Built-in HTTPS (HTTPS_PORT): miaospeed only trusts publicly trusted certificates, so reverse links
+// over wss:// need a Let's Encrypt certificate. The listener starts once the certificate files exist.
+const httpsConfig = httpsConfigFromEnv();
+const httpsListener = createHttpsListener({ ...httpsConfig, handler: app, onUpgrade: handleUpgrade });
+
+// ACME HTTP-01 challenges (acme.sh webroot mode) come first: no redirect, auth or SPA fallback.
+app.use(acmeChallenge({ webroot: httpsConfig.webroot }));
+// Plain HTTP -> HTTPS while the HTTPS listener is up (health checks and reverse links are exempt).
+if (httpsConfig.redirect && httpsConfig.port) {
+  app.use(httpsRedirect({ publicPort: httpsConfig.publicPort, isActive: () => httpsListener.active }));
+}
 
 // Security headers (the dashboard is meant to be reachable from the internet).
 app.use((req, res, next) => {
@@ -60,7 +73,8 @@ app.get('/api/health', (req, res) => {
     status: ready ? 'ok' : 'degraded',
     message: ready ? 'Node Watcher is running' : 'Node Watcher is running, but the local miaospeed is not ready',
     version,
-    engineReady: ready
+    engineReady: ready,
+    https: httpsListener.status()
   });
 });
 // Readiness: 503 while the local test engine is down, so container health checks reflect it.
@@ -127,13 +141,16 @@ const httpServer = app.listen(PORT, async () => {
   }
 });
 
-// Reverse links from miaospeed backends (miaospeed server -connect ws(s)://<host>/miaospeed/reverse/<id>).
-// They authenticate with their own token, not the dashboard session.
-httpServer.on('upgrade', (req, socket, head) => {
+// Reverse links from miaospeed backends (miaospeed server -connect ws(s)://<host>/miaospeed/reverse/<id>),
+// on both the HTTP and the HTTPS listener. They authenticate with their own token, not the dashboard session.
+function handleUpgrade(req, socket, head) {
   if (!miaospeedBackends.handleUpgrade(req, socket, head)) socket.destroy();
-});
+}
+httpServer.on('upgrade', handleUpgrade);
+httpsListener.start();
 
-// Graceful shutdown: stop timers, flush pending history, wait for the miaospeed child to exit.
+// Graceful shutdown: stop timers and the HTTPS listener, flush pending history, wait for the miaospeed
+// child to exit.
 let shuttingDown = false;
 async function shutdown(reason, exitCode = 0) {
   if (shuttingDown) return;
@@ -142,6 +159,8 @@ async function shutdown(reason, exitCode = 0) {
   try {
     schedulerService.stopMonitoring();
     registry.flushAll();
+    // Not awaited: open connections (reverse links) end with miaospeedBackends.stop() or the exit.
+    httpsListener.close();
     await miaospeedBackends.stop();
   } catch (error) {
     logger.error(`Error during shutdown: ${error.message}`);

@@ -4,6 +4,9 @@ const registry = require('../services/probes');
 
 const router = express.Router();
 const MIAOSPEED_IMAGE = process.env.MIAOSPEED_IMAGE || 'airportr/miaospeed:4.7.8';
+// One-click installer (same mirror as the README's master install command).
+const SCRIPT_URL = process.env.PROBE_SCRIPT_URL
+  || 'https://ghfast.top/https://raw.githubusercontent.com/leoch627/node-watcher/main/node-watcher.sh';
 
 // Base URL miaospeed backends dial for reverse links. Behind an HTTPS reverse proxy this is
 // wss://<domain>; MIAOSPEED_PUBLIC_URL overrides what the request suggests.
@@ -21,6 +24,7 @@ function connectInfo(req, record) {
     url,
     token: record.token,
     secure: url.startsWith('wss://'),
+    script: `wget -N ${SCRIPT_URL} && bash node-watcher.sh probe --connect '${url}' --token '${record.token}'`,
     docker: `docker run -d --name miaospeed --restart unless-stopped ${MIAOSPEED_IMAGE} ${args}`,
     binary: `./miaospeed ${args}`,
     windows: `miaospeed.exe server -connect "${url}" -token "${record.token}"`

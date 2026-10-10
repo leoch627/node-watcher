@@ -77,7 +77,16 @@ if (command === 'docker') {
   if (args[0] === 'compose' && process.env.MOCK_NO_COMPOSE && !fs.existsSync(readyFile)) process.exit(1);
   if (args[0] === 'context') console.log('unix:///var/run/docker.sock');
   if (args[0] === 'ps') console.log(process.env.MOCK_PUBLISHED_PORTS || '');
-  if (args[0] === 'inspect') console.log(process.env.MOCK_HEALTH || 'running healthy');
+  if (args[0] === 'inspect') {
+    const format = args[args.indexOf('--format') + 1] || '';
+    const key = String(args.at(-1)).replace(/[^A-Za-z0-9]/g, '_');
+    if (format.includes('working_dir')) console.log(process.env['MOCK_WORKDIR_' + key] || '');
+    else if (format.includes('com.docker.compose.project')) {
+      if (process.env['MOCK_PROJECT_' + key] === undefined) process.exit(1);
+      console.log(process.env['MOCK_PROJECT_' + key]);
+    } else console.log(process.env.MOCK_HEALTH || 'running healthy');
+  }
+  if (args[0] === 'logs') console.log(process.env.MOCK_LOGS ?? 'MiaoSpeed Reverse | [m-1] session#1 link established, remote=203.0.113.7:443');
 }
 if (command === 'docker' || command === 'docker-compose') {
   if (args.includes('config') && process.env.TEST_COMPOSE_BINARY) {
@@ -90,6 +99,15 @@ if (command === 'docker' || command === 'docker-compose') {
     process.exit(1);
   }
   if (args.includes('up') && process.env.MOCK_UP_FAIL) process.exit(1);
+  if (args.includes('exec') && args.includes('acme.sh')) {
+    if (args.includes('--issue')) process.exit(Number(process.env.MOCK_ACME_ISSUE_EXIT || 0));
+    if (args.includes('--install-cert')) {
+      const tls = path.join(path.dirname(args[args.indexOf('--env-file') + 1]), 'data', 'tls');
+      fs.mkdirSync(tls, { recursive: true });
+      fs.writeFileSync(path.join(tls, 'fullchain.pem'), 'cert');
+      fs.writeFileSync(path.join(tls, 'key.pem'), 'key');
+    }
+  }
 }
 `;
   const source = path.join(temporary, 'mock-source');
@@ -109,10 +127,10 @@ if (command === 'docker' || command === 'docker-compose') {
   return {
     directory,
     daemonConfig: path.join(temporary, 'daemon.json'),
-    run(overrides = {}, args = [directory], inputScript = false) {
+    run(overrides = {}, args = [directory], inputScript = false, stdin = undefined) {
       return spawnSync('/bin/bash', inputScript ? ['-s', '--', ...args] : [script, ...args], {
         encoding: 'utf8',
-        input: inputScript ? fs.readFileSync(script, 'utf8') : undefined,
+        input: inputScript ? fs.readFileSync(script, 'utf8') : stdin,
         env: {
           ...process.env,
           PATH: binaries,
@@ -124,10 +142,16 @@ if (command === 'docker' || command === 'docker-compose') {
           TMPDIR: temporary,
           BASH_ENV: bashEnvironment,
           NODE_WATCHER_DOCKER_CONFIG: path.join(temporary, 'daemon.json'),
+          NODE_WATCHER_SHORTCUT: path.join(temporary, 'shortcut', 'nw'),
           ...(options.defaultDirectory ? { MOCK_DEFAULT_DIR: directory } : {}),
           ...overrides
         }
       });
+    },
+    shortcut: path.join(temporary, 'shortcut', 'nw'),
+    // Drive the interactive menu with piped answers.
+    menu(answers, overrides = {}) {
+      return this.run({ NODE_WATCHER_FORCE_MENU: '1', ...overrides }, [], false, answers);
     },
     config() {
       return dotenv.parse(fs.readFileSync(path.join(directory, '.env')));
@@ -149,8 +173,6 @@ test('deploy script creates secure credentials and uses the prebuilt image on AR
   assert.equal(config.AUTH_USERNAME, 'admin');
   assert.match(config.AUTH_PASSWORD, /^[a-f0-9]{36}$/);
   assert.match(config.AUTH_SESSION_SECRET, /^[a-f0-9]{64}$/);
-  assert.match(config.MIHOMO_SECRET, /^[a-f0-9]{64}$/);
-  assert.notEqual(config.AUTH_SESSION_SECRET, config.MIHOMO_SECRET);
   assert.ok(Number(config.PORT) >= 1000 && Number(config.PORT) <= 10000);
   assert.ok(result.stdout.includes(config.AUTH_PASSWORD));
   assert.ok(result.stdout.includes(`http://192.168.1.20:${config.PORT}`));
@@ -163,6 +185,9 @@ test('deploy script creates secure credentials and uses the prebuilt image on AR
   assert.equal(service.platform, undefined);
   assert.equal(service.build, undefined);
   assert.deepEqual(service.volumes, ['./data:/app/data${NODE_WATCHER_VOLUME_LABEL:-}', './logs:/app/logs${NODE_WATCHER_VOLUME_LABEL:-}']);
+  assert.deepEqual(service.ports, ['${PORT:?PORT must not be empty}:3000']);
+  assert.deepEqual(Object.keys(compose.services), ['node-watcher'], 'no acme service without a domain');
+  assert.equal(service.environment.HTTPS_PORT, undefined);
   assert.ok(deployment.calls().some(args => args.includes('up') && args.includes('--no-build') && !args.includes('--wait')));
   assert.ok(deployment.calls().some(args => args[0] === 'inspect'));
 });
@@ -480,112 +505,186 @@ test('previous default GHCR image switches to 1ms while custom tags stay pinned'
   }
 });
 
-// ---- distributed probes ----------------------------------------------------------------------
-const sampleJoin = `nwp://p-1a2b3c4d:${'A'.repeat(20)}_-x${'b'.repeat(9)}@203.0.113.7:7443?fp=${'ab'.repeat(32)}`;
+
+// ---- domain / HTTPS (acme.sh) ----------------------------------------------------------------
 const loadCompose = deployment => yaml.load(fs.readFileSync(path.join(deployment.directory, 'compose.deploy.yml'), 'utf8'));
+const acmeCalls = deployment => deployment.calls().filter(args => args.includes('exec') && args.includes('acme.sh'));
 
-test('master: --probe-port publishes the probe listener and --no-probes removes it again', context => {
+test('domain mode publishes 80/443, enables HTTPS and issues a certificate over HTTP-01', context => {
   const deployment = createDeployment(context);
-  let result = deployment.run({}, ['-d', deployment.directory, '--probe-port', '7443', '--public-host', 'watch.example.com']);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(deployment.config().PROBE_PORT, '7443');
-  assert.equal(deployment.config().PROBE_PUBLIC_HOST, 'watch.example.com');
-  let service = loadCompose(deployment).services['node-watcher'];
-  assert.ok(service.ports.includes('${PROBE_PORT}:${PROBE_PORT}'));
-  assert.equal(service.environment.PROBE_PORT, '${PROBE_PORT}');
-  assert.match(result.stdout, /探针端口：TCP 7443/);
-  assert.doesNotMatch(result.stdout, /--public-host 公网IP/, 'no hint once a public host is set');
-
-  result = deployment.run({}, ['-d', deployment.directory]);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(deployment.config().PROBE_PORT, '7443', 'kept on update');
-
-  result = deployment.run({}, ['-d', deployment.directory, '--no-probes']);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(deployment.config().PROBE_PORT, '');
-  service = loadCompose(deployment).services['node-watcher'];
-  assert.equal(service.ports.length, 1);
-  assert.equal(service.environment.PROBE_PORT, undefined);
-});
-
-test('master: the probe port must differ from the panel port and be free', context => {
-  const deployment = createDeployment(context);
-  let result = deployment.run({}, ['-d', deployment.directory, '-p', '8080', '--probe-port', '8080']);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /探针端口不能与面板端口相同/);
-  result = deployment.run({ MOCK_BUSY_PORTS: '7443' }, ['-d', deployment.directory, '-p', '8080', '--probe-port', '7443']);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /7443 已被占用/);
-  result = deployment.run({}, ['-d', deployment.directory, '--probe-port', '70000']);
-  assert.notEqual(result.status, 0);
-  result = deployment.run({}, ['-d', deployment.directory, '--public-host', 'http://example.com:3000']);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /--public-host/);
-  result = deployment.run({}, ['-d', deployment.directory, '--join', sampleJoin]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /--join 只用于探针/);
-});
-
-test('probe: deploys an outbound-only agent container and keeps the join string on update', context => {
-  const deployment = createDeployment(context);
-  let result = deployment.run({}, ['probe', '--join', sampleJoin, '-d', deployment.directory]);
+  const result = deployment.run({}, ['-d', deployment.directory, '--domain', 'Monitor.Example.com', '--acme-email', 'ops@example.com']);
   assert.equal(result.status, 0, result.stderr);
   const config = deployment.config();
-  assert.equal(config.NODE_WATCHER_JOIN, sampleJoin);
+  assert.equal(config.NODE_WATCHER_DOMAIN, 'monitor.example.com');
+  assert.equal(config.ACME_MODE, 'http');
+  assert.equal(config.MIAOSPEED_PUBLIC_URL, 'wss://monitor.example.com');
+  assert.equal(config.AUTH_COOKIE_SECURE, 'true', 'secure cookies once the certificate is installed');
+  const compose = loadCompose(deployment);
+  const service = compose.services['node-watcher'];
+  assert.deepEqual(service.ports, ['${HTTP_HOST_PORT:-80}:3000', '${HTTPS_HOST_PORT:-443}:3443']);
+  assert.equal(service.environment.HTTPS_PORT, 3443);
+  assert.equal(service.environment.HTTPS_REDIRECT, 'true');
+  assert.equal(service.environment.ACME_WEBROOT, '/app/data/acme');
+  assert.equal(service.environment.TLS_CERT_FILE, '/app/data/tls/fullchain.pem');
+  assert.equal(service.environment.MIAOSPEED_PUBLIC_URL, '${MIAOSPEED_PUBLIC_URL:-}');
+  assert.equal(service.env_file, undefined);
+  const acme = compose.services.acme;
+  assert.equal(acme.image, '${ACME_IMAGE:-neilpang/acme.sh:3.1.5}');
+  assert.equal(acme.command, 'daemon');
+  assert.equal(acme.restart, 'unless-stopped');
+  assert.equal(acme.env_file, undefined, 'HTTP mode needs no credentials');
+  assert.deepEqual(acme.volumes, ['./data/acme:/webroot${NODE_WATCHER_VOLUME_LABEL:-}', './data/tls:/tls${NODE_WATCHER_VOLUME_LABEL:-}', './acme:/acme.sh${NODE_WATCHER_VOLUME_LABEL:-}']);
+  const issue = acmeCalls(deployment).find(args => args.includes('--issue'));
+  for (const expected of ['--server', 'letsencrypt', '-d', 'monitor.example.com', '--webroot', '/webroot', '--accountemail', 'ops@example.com']) assert.ok(issue.includes(expected), expected);
+  const install = acmeCalls(deployment).find(args => args.includes('--install-cert'));
+  assert.ok(install.includes('/tls/key.pem') && install.includes('/tls/fullchain.pem'));
+  assert.match(install[install.indexOf('--reloadcmd') + 1], /chown 1000:1000 .*chmod 600 \/tls\/key\.pem/);
+  assert.match(result.stdout, /访问地址：https:\/\/monitor\.example\.com/);
+  assert.match(result.stdout, /wss:\/\/monitor\.example\.com\/miaospeed\/reverse\//);
+
+  // Repeat deployment: acme.sh exits 2 ("Skipping") while the certificate is valid.
+  const again = deployment.run({ MOCK_ACME_ISSUE_EXIT: '2' }, ['-d', deployment.directory]);
+  assert.equal(again.status, 0, again.stderr);
+  assert.equal(deployment.config().NODE_WATCHER_DOMAIN, 'monitor.example.com', 'domain kept on update');
+});
+
+test('certificate failures keep the HTTP panel running and explain how to retry', context => {
+  const deployment = createDeployment(context);
+  const result = deployment.run({ MOCK_ACME_ISSUE_EXIT: '1' }, ['-d', deployment.directory, '--domain', 'monitor.example.com']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /证书申请失败/);
+  assert.match(result.stderr, /A \/ AAAA 记录/);
+  assert.equal(deployment.config().AUTH_COOKIE_SECURE, 'false');
+  assert.ok(!acmeCalls(deployment).some(args => args.includes('--install-cert')));
+  assert.match(result.stdout, /部署完成/);
+});
+
+test('DNS-01 credentials are read from the environment into acme.env only', context => {
+  const deployment = createDeployment(context);
+  const secret = "cf-secret-$token'x";
+  const result = deployment.run({ CF_Token: secret, CF_Account_ID: 'acct', UNRELATED_SECRET: 'nope' },
+    ['-d', deployment.directory, '--domain', 'monitor.example.com', '--acme', 'dns', '--dns-provider', 'cf']);
+  assert.equal(result.status, 0, result.stderr);
+  const acmeEnv = path.join(deployment.directory, 'acme.env');
+  assert.equal(fs.statSync(acmeEnv).mode & 0o777, 0o600);
+  const written = fs.readFileSync(acmeEnv, 'utf8');
+  assert.ok(written.includes('CF_Account_ID=') && written.includes('CF_Token=') && !written.includes('UNRELATED_SECRET'));
+  for (const file of ['compose.deploy.yml', '.env']) {
+    assert.ok(!fs.readFileSync(path.join(deployment.directory, file), 'utf8').includes('cf-secret'), file);
+  }
+  const compose = loadCompose(deployment);
+  assert.equal(compose.services.acme.env_file, 'acme.env');
+  assert.equal(compose.services['node-watcher'].env_file, undefined);
+  const issue = acmeCalls(deployment).find(args => args.includes('--issue'));
+  assert.ok(issue.includes('--dns') && issue.includes('dns_cf'));
+  assert.ok(!deployment.calls().some(args => args.some(value => String(value).includes('cf-secret'))), 'secret never on a docker command line');
+});
+
+test('DNS mode without credentials and invalid domain options stop before touching the directory', context => {
+  const deployment = createDeployment(context);
+  let result = deployment.run({}, ['-d', deployment.directory, '--domain', 'monitor.example.com', '--acme', 'dns', '--dns-provider', 'ali']);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /DNS API 凭据/);
+  for (const args of [
+    ['--domain', 'http://example.com'], ['--domain', 'example.com:8443'], ['--domain', '1.2.3.4'], ['--domain', 'localhost'],
+    ['--acme', 'tls'], ['--dns-provider', 'Bad-Name'], ['--acme-email', 'nope'], ['--acme', 'dns'],
+    ['--domain', 'monitor.example.com', '--port', '8080'], ['--domain', 'monitor.example.com', '--acme', 'dns'],
+    ['--join', 'nwp://x'], ['--probe-port', '7443']
+  ]) {
+    result = deployment.run({}, ['-d', deployment.directory, ...args]);
+    assert.notEqual(result.status, 0, JSON.stringify(args));
+  }
+  assert.equal(fs.existsSync(path.join(deployment.directory, '.env')), false);
+});
+
+// ---- miaospeed probes -------------------------------------------------------------------------
+const sampleConnect = 'wss://monitor.example.com/miaospeed/reverse/m-1a2b3c4d';
+const sampleToken = 'Tok3n_-abcdefghijklmnopqrstuvwxyz';
+
+test('probe: deploys miaospeed with the token kept in .env (mode 600)', context => {
+  const deployment = createDeployment(context);
+  let result = deployment.run({}, ['probe', '--connect', sampleConnect, '--token', sampleToken, '-d', deployment.directory]);
+  assert.equal(result.status, 0, result.stderr);
+  const config = deployment.config();
+  assert.equal(config.MIAOSPEED_CONNECT, sampleConnect);
+  assert.equal(config.MIAOSPEED_TOKEN, sampleToken);
   assert.equal(config.AUTH_PASSWORD, undefined, 'a probe has no login');
-  assert.equal(config.NODE_WATCHER_IMAGE, 'ghcr.1ms.run/leoch627/node-watcher:latest');
   assert.equal(fs.statSync(path.join(deployment.directory, '.env')).mode & 0o777, 0o600);
   const compose = loadCompose(deployment);
-  assert.deepEqual(Object.keys(compose.services), ['node-watcher-probe']);
-  const service = compose.services['node-watcher-probe'];
+  assert.deepEqual(Object.keys(compose.services), ['miaospeed']);
+  const service = compose.services.miaospeed;
+  assert.equal(service.image, '${MIAOSPEED_IMAGE:-airportr/miaospeed:4.7.8}');
+  assert.deepEqual(service.command, ['server', '-connect', '${MIAOSPEED_CONNECT:?MIAOSPEED_CONNECT must not be empty}', '-token', '${MIAOSPEED_TOKEN:?MIAOSPEED_TOKEN must not be empty}']);
   assert.equal(service.ports, undefined, 'a probe publishes no ports');
-  assert.equal(service.environment.NODE_WATCHER_MODE, 'agent');
-  assert.equal(service.environment.NODE_WATCHER_JOIN, '${NODE_WATCHER_JOIN:?NODE_WATCHER_JOIN must not be empty}');
-  const composeCalls = deployment.calls().filter(args => args[0] === 'compose');
-  assert.ok(composeCalls.some(args => args.includes('node-watcher-probe') && args.includes('pull')));
-  assert.ok(composeCalls.some(args => args.includes('node-watcher-probe') && args.includes('up')));
-  assert.ok(deployment.calls().some(args => args[0] === 'inspect' && args.includes('node-watcher-probe')));
-  assert.match(result.stdout, /已连接主控 203\.0\.113\.7:7443/);
+  assert.deepEqual(service.security_opt, ['no-new-privileges:true']);
+  assert.equal(service.restart, 'unless-stopped');
+  assert.ok(!fs.readFileSync(path.join(deployment.directory, 'compose.deploy.yml'), 'utf8').includes(sampleToken));
+  assert.ok(!deployment.calls().some(args => args.includes(sampleToken)), 'token never on a docker command line');
+  assert.ok(deployment.calls().some(args => args[0] === 'compose' && args.includes('miaospeed') && args.includes('up')));
+  assert.match(result.stdout, /已连接主控 monitor\.example\.com/);
+  assert.match(result.stdout, /设置 → miaospeed 后端/);
 
-  result = deployment.run({}, ['probe', '-d', deployment.directory]);
+  // Update with a new token replaces it; omitting both keeps the saved values.
+  result = deployment.run({}, ['probe', '--token', 'new-token-value', '-d', deployment.directory]);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(deployment.config().NODE_WATCHER_JOIN, sampleJoin);
-});
+  assert.equal(deployment.config().MIAOSPEED_TOKEN, 'new-token-value');
+  assert.equal(deployment.config().MIAOSPEED_CONNECT, sampleConnect);
 
-test('probe: missing or malformed join strings and master-only options are rejected', context => {
-  const deployment = createDeployment(context);
-  let result = deployment.run({}, ['probe', '-d', deployment.directory]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /首次部署探针需要加入串/);
-  for (const join of ['https://example.com', 'nwp://p-1:tok@host', `nwp://p-1:tok@host:7443?fp=xyz`, `nwp://p-1:t'ok@host:7443`]) {
-    result = deployment.run({}, ['probe', '--join', join, '-d', deployment.directory]);
-    assert.notEqual(result.status, 0, join);
-    assert.match(result.stderr, /加入串格式不正确/, join);
+  // Invalid URLs are rejected; public ws:// warns loudly; handshake errors are explained.
+  for (const url of ['https://monitor.example.com/miaospeed/reverse/m-1', 'wss://monitor.example.com/other/m-1', 'nwp://p-1:t@h:7443']) {
+    result = deployment.run({}, ['probe', '--connect', url, '--token', sampleToken, '-d', deployment.directory]);
+    assert.notEqual(result.status, 0, url);
+    assert.match(result.stderr, /连接地址格式不正确/, url);
   }
-  result = deployment.run({}, ['probe', '--join', sampleJoin, '-d', deployment.directory, '-p', '8080']);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /probe 子命令只支持/);
-  result = deployment.run({}, ['probe', '--join', sampleJoin, '-d', deployment.directory, '--probe-port', '7443']);
-  assert.notEqual(result.status, 0);
-});
-
-test('probe: explains why it cannot reach the master and leaves the container retrying', context => {
-  const deployment = createDeployment(context);
-  fs.mkdirSync(path.join(deployment.directory, 'logs'), { recursive: true });
-  fs.writeFileSync(path.join(deployment.directory, 'logs', 'combined.log'),
-    '{"level":"warn","message":"Master connection error: connect ECONNREFUSED 203.0.113.7:7443"}\n');
-  const result = deployment.run({ MOCK_HEALTH: 'running starting' }, ['probe', '--join', sampleJoin, '-d', deployment.directory]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /暂未连上主控（容器会持续自动重试）/);
-  assert.match(result.stderr, /连不上主控 203\.0\.113\.7:7443/);
-  assert.equal(deployment.config().NODE_WATCHER_JOIN, sampleJoin, 'configuration kept for the next attempt');
-});
-
-test('probe: the join string round-trips through real Compose interpolation', { skip: !process.env.TEST_COMPOSE_BINARY }, context => {
-  const deployment = createDeployment(context);
-  const result = deployment.run({}, ['probe', '--join', sampleJoin, '-d', deployment.directory]);
+  result = deployment.run({}, ['probe', '--connect', 'ws://203.0.113.7:3000/miaospeed/reverse/m-1', '-d', deployment.directory]);
   assert.equal(result.status, 0, result.stderr);
-  const config = spawnSync(process.env.TEST_COMPOSE_BINARY, ['--env-file', path.join(deployment.directory, '.env'), '-f', path.join(deployment.directory, 'compose.deploy.yml'), 'config', '--environment'], { encoding: 'utf8' });
-  assert.equal(config.status, 0, config.stderr);
-  assert.equal(config.stdout.split('\n').find(line => line.startsWith('NODE_WATCHER_JOIN=')), `NODE_WATCHER_JOIN=${sampleJoin}`);
+  assert.match(result.stderr, /警告：连接地址使用未加密的 ws:\/\//);
+  result = deployment.run({ MOCK_LOGS: 'connection lost, error=handshake signature mismatch, check the token on both sides' }, ['probe', '-d', deployment.directory]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /token 不正确/);
+});
+
+test('probe: first deployment needs --connect and --token', context => {
+  const deployment = createDeployment(context);
+  const result = deployment.run({}, ['probe', '--connect', sampleConnect, '-d', deployment.directory]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /首次部署探针需要连接地址和 token/);
+  assert.equal(fs.existsSync(path.join(deployment.directory, '.env')), false);
+});
+
+// ---- interactive menu -------------------------------------------------------------------------
+test('menu: guided master install with a domain, then reuse of the saved configuration', context => {
+  const deployment = createDeployment(context);
+  // 1 install → directory → use a domain → domain → HTTP-01 → email → username → generated password → install shortcut
+  let result = deployment.menu(['1', deployment.directory, 'y', 'monitor.example.com', '1', '', 'owner', '', 'y', ''].join('\n'));
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /1\. 安装 \/ 重新安装主控（面板）/);
+  assert.match(result.stdout, /主控（面板）：未安装/);
+  const config = deployment.config();
+  assert.equal(config.NODE_WATCHER_DOMAIN, 'monitor.example.com');
+  assert.equal(config.AUTH_USERNAME, 'owner');
+  assert.match(config.AUTH_PASSWORD, /^[a-f0-9]{36}$/);
+  assert.ok(result.stdout.includes(config.AUTH_PASSWORD), 'generated password is shown once');
+  assert.ok(acmeCalls(deployment).some(args => args.includes('--issue') && args.includes('--webroot')));
+  assert.ok(fs.statSync(deployment.shortcut).mode & 0o100, 'nw shortcut installed');
+  assert.match(result.stdout, /输入 nw/);
+
+  // Re-run: the previous configuration is offered and kept.
+  result = deployment.menu(['1', deployment.directory, 'y', ''].join('\n'), { MOCK_WORKDIR_node_watcher: deployment.directory });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /读取到上次安装的配置/);
+  assert.match(result.stdout, /主控（面板）：已安装/);
+  assert.deepEqual(deployment.config(), config);
+});
+
+test('menu: guided probe deployment and exit', context => {
+  const deployment = createDeployment(context);
+  let result = deployment.menu(['2', deployment.directory, sampleConnect, sampleToken, 'n', ''].join('\n'));
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(deployment.config().MIAOSPEED_TOKEN, sampleToken);
+  assert.ok(!result.stdout.includes(sampleToken), 'token is masked');
+  assert.equal(fs.existsSync(deployment.shortcut), false);
+  result = deployment.menu('0\n');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /已退出/);
 });

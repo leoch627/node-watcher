@@ -10,8 +10,10 @@ config.json
 # Local subscription dumps (contain node credentials)
 sub_*
 
-# Mihomo / miaospeed binaries (npm run setup:bin)
+# miaospeed binary (npm run setup:bin)
 bin/miaospeed*
+
+# Leftovers of versions that ran a separate mihomo process (may contain node credentials)
 mihomo
 mihomo-config.yaml
 mihomo-data/
