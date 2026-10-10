@@ -16,6 +16,7 @@ Node Watcher 使用 Mihomo 执行代理检测，提供 Web 管理界面、状态
 | 状态告警 | 支持 Bark、SMTP 邮件和 Telegram Bot，可分别启用和测试 |
 | 检测报告 | 将当前节点状态和服务检测结果生成 PNG 矩阵，可预览、下载 |
 | 登录保护 | 管理员登录、签名会话 Cookie、登录失败限速 |
+| 分布式探针 | 主控部署在公网，探针部署在不同网络，通过 TLS 私有协议连回主控，用同一份订阅从多个地点检测并对比 |
 
 ## 快速开始
 
@@ -240,15 +241,54 @@ docker compose ps
 
 ### 连通性与在线率
 
-- 启动时加载来源并执行一次连通性检测；之后按配置周期重新拉取来源并检测。
+- 启动时加载来源并执行一次连通性检测；之后按检测周期探测，并按**订阅刷新周期**（默认 30 分钟，可单独设置）重新拉取来源。订阅刷新失败时沿用上一次成功的节点列表，节点不会因为订阅服务器短暂故障而从面板消失。
 - 默认检测周期为 **5 分钟**，单节点超时为 **10 秒**，并发数为 **8**；并发可设置为 1–32。
-- 连通性检测通过 Mihomo 请求 `https://www.gstatic.com/generate_204`，显示的是该请求的延迟，不是 ICMP Ping 或带宽测速结果。
+- 连通性检测通过 Mihomo 请求 `https://www.gstatic.com/generate_204`（可在设置中改成自定义探测地址），显示的是该请求的延迟，不是 ICMP Ping 或带宽测速结果。
+- 一次探测失败后会立即重试 `retryAttempts` 次（0–3，默认 1）；每多一次重试，离线节点每轮最多多耗约 `超时 + 1 秒`，节点很多时建议保持 1–2。
+- Mihomo 未就绪（启动中、崩溃重启中）时，本轮检测会被**跳过**：不记录历史、不改变节点状态、不发告警。Mihomo 异常退出会自动按退避间隔重启。
 - 在线率为指定时间窗口内「成功检测次数 / 总检测次数」，不是按持续在线时长计算。没有检测记录时不显示在线率。
-- 历史记录按节点保留最近 31 天、最多 10,000 条；检测频率较高时，记录数量上限可能使实际覆盖时间短于 30 天。
+- 历史按节点、按**小时汇总**保存最近 31 天，不再受检测频率影响，`30d` 在线率覆盖完整 30 天（以小时为粒度）。升级时旧的逐次记录会自动转换，原文件保留为 `history.json.v1.bak`。
+- 节点 ID 由「来源 + 协议 + 服务器 + 端口 + 凭据」生成，**不再包含节点名**，机场改名不会重置历史和告警状态。（升级后各节点会获得新的 ID，旧历史不会沿用；如果之前在 `excludeNodes` 里按 ID 排除过节点，需要重新排除。）
 
 ### 流媒体与 AI 服务
 
-流媒体检测需手动触发，不随定时连通性检测自动执行。任务按节点串行切换 Mihomo 出口，同一节点的各平台请求并行执行，避免不同节点的出口相互干扰。
+流媒体检测需手动触发，不随定时连通性检测自动执行。默认任务按节点串行切换 Mihomo 出口，同一节点的各平台请求并行执行，避免不同节点的出口相互干扰；检测前会确认出口选择，检测后再确认一次，期间如果出口被改动（例如配置重载），该节点结果会作废而不是记到错误的节点上。离线节点会被跳过并保留它之前的结果。
+
+**通用项目**：Netflix、YouTube Premium、Disney+、Prime Video、ChatGPT、TikTok、HBO Max。某项本次检测出错时，会保留上次成功的结果并标记为“上次结果”。
+
+**原生解锁 / DNS 解锁**
+
+思路来自 [xykt/RegionRestrictionCheck](https://github.com/xykt/RegionRestrictionCheck)，但判定方式不同：原脚本用 `nslookup`/`dig` 检查**运行脚本那台机器**的 DNS，经代理检测时那台机器是监控主机，节点的 DNS 在机场服务器上解析，照搬会让每个节点都得到监控主机的结果。本项目改为比较**平台看到的客户端 IP**与**节点通用出口 IP**（检测前后各取一次 Cloudflare trace）：
+
+- 相同 → **原生**；不同 → **DNS**（DNS 解锁、SNI 代理或按域名分流到其他出口，三者从外部无法区分）。
+- 节点出口前后两次不一致（多出口 / 负载均衡）、或 IPv4 与 IPv6 不同族时，不下结论，悬停可看到原因。
+- 仅在平台可访问（可用 / 受限）时标注，和原脚本一致。
+
+| 平台 | 平台看到的 IP 来自 |
+| --- | --- |
+| Netflix | 影片页 `requestIpAddress` |
+| YouTube | 页面 `INNERTUBE_CONTEXT.client.remoteHost` |
+| Prime Video | 页面 `customerIPAddress` |
+| ChatGPT | `chatgpt.com/cdn-cgi/trace` |
+| KKTV | 接口返回的 `ip` |
+
+Disney+、TikTok、HBO Max 及其他区域项目没有回显客户端 IP 的接口，因此不标注解锁类型。以上字段均为 2026-10 实测格式，平台改版后可能失效（失效时只是不显示标注，不会误判）。
+
+**节点地区与区域项目**
+
+- 节点地区优先取节点名里的国旗 emoji（两个区域指示符即 ISO 国家码，如 🇯🇵 → JP）；没有国旗时回退到“香港 / 日本 / HK / JP”等地名和代码；“剩余流量”“到期时间”之类的信息节点不识别地区。
+- 流媒体检测会按该地区追加区域专属项目，并读取出口 IP 的实际国家与旗帜地区对比，**不一致时在面板里标出**（例如节点名是 🇯🇵，出口却在 US）。没有旗帜时以出口 IP 所在地区为准。
+
+| 地区 | 区域项目 |
+| --- | --- |
+| JP | Abema |
+| TW | 动画疯（Bahamut）、KKTV、Bilibili 港澳台 |
+| HK | Viu TV、Bilibili 港澳台 |
+| MO | Bilibili 港澳台 |
+
+其他地区目前只有通用项目。Abema、KKTV、Viu TV、Bilibili 的接口返回格式已实际验证；动画疯会被 Cloudflare 拦截数据中心 IP，此时显示“错误”而不是误报“不可用”。
+
+**并行检测（可选）**：设置 `MEDIA_CONCURRENCY`（1–8，默认 1）后，Mihomo 会为每个额外槽位生成一个独立的选择组和本地监听端口（默认从 `MIHOMO_HTTP_PORT + 10` 起），多个节点可同时检测。该模式依赖 Mihomo `listeners` 的 `proxy` 字段指向代理组，尚未在真实 Mihomo 上验证，建议先小范围试用。
 
 结果反映检测时平台页面或接口的响应，不保证实际账号登录、订阅、播放或使用体验。平台改版、风控、验证码及网络波动都可能影响判定；连通性正常也不代表某个平台一定可用。
 
@@ -260,15 +300,106 @@ docker compose ps
 | 邮件 | SMTP 主机、端口、TLS 设置、账号、密码、发件人和收件人 |
 | Telegram | Bot Token 和 Chat ID |
 
-节点首次检测只建立状态基线，不发送告警。后续从在线变为离线时发送故障通知，从离线变为在线时发送恢复通知，状态不变不会重复通知。
+节点首次检测只建立状态基线，不发送告警。告警规则：
+
+- 连续失败 `failureThreshold` 次（默认 2）才发送离线告警；单次失败只在面板上显示离线，不会通知，偶发抖动不再刷屏。
+- 只有发送过离线告警的节点，恢复后才发送恢复通知；状态不变不会重复通知。
+- 同一轮检测里有多个节点变化时，合并成一条消息（超过 3 个节点时，列表最多显示 15 个）。
+- 一轮里 80% 以上节点同时失败（且至少 5 个节点）时，更可能是监控主机网络或 Mihomo 的问题，此时只发一条“大量节点同时检测失败”，暂停逐节点告警；等失败比例回落后再发一条“已恢复”，真正离线的节点仍会正常告警。
+- 各渠道并发发送，一个渠道故障不影响其他渠道。
 
 当前节点状态和流媒体结果保存在内存中，重启后需重新检测，首次检测也会重新建立告警基线；在线率历史会从磁盘恢复。
+
+## 分布式探针
+
+一台**主控**（公网，Web 面板、订阅、告警、汇总）加任意台**探针**（不同运营商 / 地区 / 家宽 / 机房），同一份订阅在每个网络里各测一遍。
+
+```text
+   探针 A（上海电信）──┐
+   探针 B（广州移动）──┼── TLS 1.3 ──▶  主控 :7443   ◀── HTTPS ── 浏览器
+   探针 C（东京家宽）──┘                 :3000（面板，经反向代理）
+```
+
+- 探针只**主动连出**到主控，不开放任何端口；家宽、NAT 后面都能用。
+- 主控统一调度：每轮检测同时下发给本机（可关闭）和所有在线探针，结果按探针分别记录状态、在线率历史和告警。
+- 面板「节点」页可切换探针查看，「各探针」列用圆点对比同一节点在每个网络的状态（悬停看延迟）；流媒体检测和 PNG 报告都跟随所选探针。
+- 告警会注明探针，例如「节点离线告警 - 东京 01 @ 上海电信」；某个探针上 80% 以上节点同时失败时，只发一条「该探针网络异常」而不是逐节点告警。
+- 探针断开超过 `max(3 分钟, 2 × 检测周期)` 会发「探针离线」告警，重连后发「探针已恢复」。
+
+### 协议与安全
+
+| 项目 | 做法 |
+| --- | --- |
+| 传输 | TLS 1.3，4 字节长度前缀 + JSON 帧，20 秒心跳，65 秒无流量断开重连（退避 1–30 秒） |
+| 主控身份 | 首次启动用 `openssl` 生成自签证书（`data/probe-tls/`），探针在加入串里**固定证书 SHA-256 指纹**，中间人无法冒充主控；也可用 `PROBE_TLS_CERT_FILE` / `PROBE_TLS_KEY_FILE` 指定正式证书（此时加入串仍带指纹） |
+| 探针身份 | 每个探针一个 192 位随机 token，主控只保存其 SHA-256；可在面板停用、重置或删除，立即断开 |
+| 防扫描 / DoS | TLS 握手（含只建 TCP 不握手的连接）与鉴权各 10 秒超时；鉴权前单帧上限 64 KB；同一 IP 10 分钟内鉴权失败 10 次即拒绝；同时握手中的连接上限 64 |
+| 重复部署 | 两台机器用了同一个加入串时，后连上的保留，被顶替的探针改为 5 分钟后重试并在日志中说明，不会互相抢连接 |
+| 探针权限 | 探针只执行固定操作（加载节点、测活、流媒体检测），不执行主控下发的任何命令或脚本 |
+
+加入串格式：`nwp://<探针ID>:<token>@<主控地址>:<端口>?fp=<证书指纹>`，相当于密码，**只在创建 / 重置时显示一次**。
+
+### 部署步骤
+
+1. **主控**按「快速开始」部署，并放行 TCP `7443`（防火墙 + 云安全组）。用一键脚本部署的，在部署目录的 `.env` 里加一行 `PROBE_PORT=7443` 后重新运行脚本，才会映射该端口（默认不映射，避免与已有服务冲突）。如果面板通过域名访问，加入串会自动使用该域名；否则设置 `PROBE_PUBLIC_HOST`（以及端口映射时的 `PROBE_PUBLIC_PORT`）。
+2. 面板「设置 → 探针」输入名称并点「添加探针」，复制弹窗中的命令。
+3. 在目标网络的机器上运行（任选其一）：
+
+   ```bash
+   # Docker
+   docker run -d --name node-watcher-probe --restart unless-stopped \
+     -e NODE_WATCHER_MODE=agent -e NODE_WATCHER_JOIN='nwp://...' \
+     ghcr.io/leoch627/node-watcher:latest
+
+   # Docker Compose：把 NODE_WATCHER_JOIN 写进 .env
+   docker compose -f docker-compose.probe.yml up -d
+
+   # 源码（需要 Node.js 22 和 mihomo）
+   NODE_WATCHER_MODE=agent NODE_WATCHER_JOIN='nwp://...' npm start
+   ```
+
+4. 探针连上后几秒内自动测一轮，之后跟随主控的检测周期。
+
+| 变量（主控） | 默认值 | 说明 |
+| --- | --- | --- |
+| `PROBE_PORT` | `7443` | 探针监听端口；`0` 关闭（源码运行）。用 `docker-compose.yml` 时容器内固定 7443，要关闭探针请删掉 7443 那行端口映射 |
+| `PROBE_HOST_PORT` | `7443` | 仅 `docker-compose.yml`：映射到宿主机的端口，同时作为加入串里的端口 |
+| `PROBE_LISTEN` | `0.0.0.0` | 探针监听地址 |
+| `PROBE_PUBLIC_HOST` | 打开面板时使用的主机名 | 写进加入串的主控地址 |
+| `PROBE_PUBLIC_PORT` | 同 `PROBE_PORT` | 端口映射 / NAT 时写进加入串的端口 |
+| `PROBE_TLS_CERT_FILE` / `PROBE_TLS_KEY_FILE` | 自动生成自签证书 | 使用自有证书 |
+| `LOCAL_PROBE` | `true` | 主控本机是否也检测；设为 `false` 时主控不启动 Mihomo，只汇总探针 |
+| `LOCAL_PROBE_NAME` | `本机` | 本机探针在面板和告警中的名字 |
+| `PROBE_IMAGE` | `ghcr.io/leoch627/node-watcher:latest` | 面板生成的 docker 命令里使用的镜像 |
+
+| 变量（探针） | 说明 |
+| --- | --- |
+| `NODE_WATCHER_MODE=agent` | 以探针模式运行（无面板、无订阅、无告警） |
+| `NODE_WATCHER_JOIN` | 加入串；也可以拆成 `MASTER_ADDR`（host:port）、`PROBE_ID`、`PROBE_TOKEN`、`MASTER_FINGERPRINT` |
+| `MEDIA_CONCURRENCY` | 流媒体并行槽位（实验性，同上文） |
+
+探针容器的健康检查访问容器内 `127.0.0.1:3000/api/ready`：Mihomo 就绪且已连上主控时为 200。
+
+### 公网部署建议
+
+- 面板（3000）放在 HTTPS 反向代理之后，并设置 `AUTH_COOKIE_SECURE=true`、`TRUST_PROXY=1`；不要把 3000 端口直接暴露到公网。最简单的 Caddy 配置：
+
+  ```caddyfile
+  watch.example.com {
+      reverse_proxy 127.0.0.1:3000
+  }
+  ```
+
+- 7443 是原始 TLS 端口，**不要**经过 HTTP 反向代理或 CDN，直接放行即可。
+- 面板已加安全响应头（CSP、`X-Frame-Options: DENY`、`nosniff`、`no-referrer`），HTTPS 下附带 HSTS。
+- 用强密码；`AUTH_SESSION_SECRET` 留空时会生成随机密钥保存在 `data/.session-secret`。
+- 订阅 token、节点凭据会通过加密通道下发给探针，探针机器同样要可信。
 
 ## 配置说明
 
 登录与 Mihomo 启动参数由环境变量控制；订阅、导入内容、检测设置和通知渠道保存在配置文件中，可通过面板管理。
 
-> **配置文件与环境变量不是逐项合并的。** 已有配置文件时，程序直接读取文件。`CHECK_INTERVAL_MINUTES`、`TIMEOUT_SECONDS`、`CHECK_CONCURRENCY` 和通知相关环境变量只用于生成缺省配置。默认 Compose 也未传入这些变量，使用 Docker 部署时请优先在面板中修改检测和通知设置。
+> **配置文件与环境变量基本不逐项合并。** 已有配置文件时，程序直接读取文件（只有配置文件里**缺失**的 `monitoring` 项会用环境变量或默认值补齐）。`CHECK_INTERVAL_MINUTES`、`TIMEOUT_SECONDS`、`CHECK_CONCURRENCY` 和通知相关环境变量只用于生成缺省配置。默认 Compose 也未传入这些变量，使用 Docker 部署时请优先在面板中修改检测和通知设置。
 
 ### 常用环境变量
 
@@ -281,7 +412,12 @@ docker compose ps
 | `AUTH_USERNAME` | `admin` | 登录用户名 |
 | `AUTH_PASSWORD` | 无 | 登录密码；默认 Compose 必填 |
 | `AUTH_PASSWORD_FILE` | 无 | 从文件读取密码，优先于 `AUTH_PASSWORD`；容器使用时需自行挂载文件并调整 Compose 环境配置 |
-| `AUTH_SESSION_SECRET` | 回退到登录密码 | 会话签名密钥，建议独立随机生成 |
+| `AUTH_SESSION_SECRET` | 随机生成并保存到 `data/.session-secret`（生产模式） | 会话签名密钥；不再从登录密码派生，也可显式设置 |
+| `SESSION_SECRET_FILE` | `data/.session-secret` | 自动生成的会话密钥保存位置 |
+| `RETRY_ATTEMPTS` | `1` | 缺省配置的失败重试次数（0–3） |
+| `FAILURE_THRESHOLD` | `2` | 缺省配置的连续失败告警阈值 |
+| `SUBSCRIPTION_REFRESH_MINUTES` | `30` | 缺省配置的订阅刷新周期 |
+| `MEDIA_CONCURRENCY` | `1` | 流媒体并行检测槽位数（1–8，见上文，实验性） |
 | `AUTH_SESSION_TTL_HOURS` | `24` | 会话有效时间，单位为小时 |
 | `AUTH_COOKIE_SECURE` | `false` | HTTPS 部署时设为 `true` |
 | `TRUST_PROXY` | `0` | 位于单层可信反向代理后时可设为 `1` |
@@ -294,7 +430,7 @@ docker compose ps
 
 ### 登录与访问边界
 
-除 `/api/health` 和 `/api/auth/*` 外，其他 API（包括 `/api/nodes/public`）及 PNG 报告接口均要求有效登录会话。会话 Cookie 使用 `HttpOnly` 和 `SameSite=Strict`。
+除 `/api/health`、`/api/ready` 和 `/api/auth/*` 外，其他 API（包括 `/api/nodes/public`）及 PNG 报告接口均要求有效登录会话。会话 Cookie 使用 `HttpOnly` 和 `SameSite=Strict`。
 
 局域网直接使用 HTTP 时保持：
 
@@ -313,6 +449,15 @@ TRUST_PROXY=1
 不要在 HTTP 部署中启用 Secure Cookie，否则登录会话无法正常使用。不要向公网暴露 Mihomo 的代理和控制端口。订阅凭据、SMTP 密码和 Bot Token 会保存在本机文件中，请限制文件访问权限，避免提交 `.env`、数据目录或真实订阅内容。
 
 非生产模式未设置密码时会关闭鉴权；开发环境也应设置密码，尤其是允许其他设备访问时。
+
+### Mihomo 二进制校验
+
+Docker 构建时下载的 Mihomo 压缩包会用 `sha256sum -c` 校验，期望值固定在 `Dockerfile` 的 `MIHOMO_SHA256_AMD64` / `MIHOMO_SHA256_ARM64` 中，取自 GitHub release 附件的 `digest`。升级 `MIHOMO_VERSION` 时需同时更新这两个值：
+
+```bash
+curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/v1.19.30 \
+  | jq -r '.assets[] | select(.name|test("mihomo-linux-(amd64|arm64)-v[0-9.]+\\.gz$")) | "\(.name) \(.digest)"'
+```
 
 ## 数据与维护
 
@@ -398,6 +543,8 @@ node-watcher.sh     一键部署、依赖安装、参数配置、随机端口与
 client/             React 前端与界面组件
 src/routes/         HTTP API 路由
 src/services/       节点解析、订阅、检测、告警、鉴权与报告
+src/probe/          主控 ↔ 探针 TLS 协议、探针注册表、证书
+src/agent.js        探针模式入口（NODE_WATCHER_MODE=agent）
 src/utils/          配置和日志工具
 test/               自动化测试
 public/             前端构建产物
@@ -422,17 +569,23 @@ docker buildx build \
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `GET` | `/api/health` | 存活检查，包含 `mihomoReady` 字段 |
+| `GET` | `/api/health` | 存活检查，包含 `mihomoReady`；Mihomo 未就绪时 `status` 为 `degraded`（HTTP 仍为 200） |
+| `GET` | `/api/ready` | 就绪检查：Mihomo 未就绪时返回 503；Docker `HEALTHCHECK` 使用此接口 |
 | `GET` | `/api/auth/session` | 查询登录状态 |
 | `POST` | `/api/auth/login` | 登录 |
 | `POST` | `/api/auth/logout` | 退出登录 |
-| `GET` | `/api/nodes/public` | 节点状态、在线率与服务检测结果，仍需登录 |
+| `GET` | `/api/nodes/public` | 节点状态、在线率与服务检测结果，仍需登录；`?probe=<探针ID>` 查看指定探针，多探针时每个节点附带 `probes` 对比 |
 | `POST` | `/api/nodes/reload` | 重新加载来源 |
 | `POST` | `/api/nodes/check` | 执行连通性检测；请求体可传 `{"reload":true}` 先刷新来源 |
-| `POST` | `/api/nodes/media-check` | 创建流媒体检测任务；请求体可传 `{"nodeIds":["节点ID"]}`，空数组检测全部 |
+| `POST` | `/api/nodes/media-check` | 创建流媒体检测任务；请求体可传 `{"nodeIds":["节点ID"],"probeId":"探针ID"}`，空数组检测全部 |
 | `GET` | `/api/nodes/jobs` | 查询检测任务进度 |
 | `GET` | `/api/system/status` | 系统、来源与 Mihomo 状态 |
-| `GET` | `/api/reports/latest.png` | 根据当前结果生成 PNG 报告 |
+| `GET` | `/api/reports/latest.png` | 根据当前结果生成 PNG 报告；`?probe=<探针ID>` 指定探针 |
+| `GET` | `/api/probes` | 探针列表、连接状态与监听信息 |
+| `POST` | `/api/probes` | 创建探针 `{"name":"…"}`，返回加入串与部署命令（仅此一次） |
+| `POST` | `/api/probes/:id/rotate` | 重置探针密钥，返回新的加入串 |
+| `PATCH` | `/api/probes/:id` | 改名或启用 / 停用 `{"name":"…","enabled":false}` |
+| `DELETE` | `/api/probes/:id` | 删除探针及其历史 |
 
 ## 常见问题
 
@@ -456,7 +609,7 @@ docker buildx imagetools inspect ghcr.io/leoch627/node-watcher:latest
 
 **网页可以访问，但所有节点检测失败？**
 
-先查看日志和 `/api/health` 中的 `mihomoReady`。Web 服务可访问不代表 Mihomo 已就绪；检查二进制路径、执行权限、端口冲突及来源加载结果，再排查节点和网络。
+先查看日志和 `/api/health` 中的 `mihomoReady`（或访问 `/api/ready`）。Mihomo 异常退出会自动重启，重启期间检测会被跳过而不是记为离线。Web 服务可访问不代表 Mihomo 已就绪；检查二进制路径、执行权限、端口冲突及来源加载结果，再排查节点和网络。
 
 **修改 `.env` 中的检测周期或通知配置没有生效？**
 
@@ -464,7 +617,15 @@ docker buildx imagetools inspect ghcr.io/leoch627/node-watcher:latest
 
 **重启后流媒体结果消失？**
 
-流媒体结果不持久化，请重新触发流媒体检测。PNG 报告根据当前内存中的结果生成，不是历史报告归档。
+流媒体结果不持久化，请重新触发流媒体检测。检测出错时会保留同一进程内上次成功的结果。PNG 报告根据当前内存中的结果生成，不是历史报告归档。
+
+**GitHub Actions 推送镜像时报 `denied: permission_denied: write_package`？**
+
+GHCR 上的 `node-watcher` 镜像包没有授权给当前仓库（常见于删除后重建同名仓库）。到 GitHub 个人主页 → Packages → `node-watcher` → Package settings → Manage Actions access，添加本仓库并设为 Write，然后在 Actions 页面重新运行失败的工作流；或者删除该镜像包，让工作流重新创建。
+
+**探针一直显示离线？**
+
+在探针机器上查看日志：`Master certificate fingerprint mismatch` 表示加入串里的指纹与主控证书不符（主控重新生成过证书时需重新创建加入串）；`Authentication failed` 表示 token 已被重置或探针已删除；`Another probe connected with the same join string` 表示两台机器用了同一个加入串。连接超时则检查主控的 7443 端口是否放行、`PROBE_PUBLIC_HOST` 是否为探针能访问到的地址。
 
 ## 许可证与致谢
 

@@ -431,12 +431,30 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
 COMPOSE
+# Distributed probes are opt-in for one-click installs: add PROBE_PORT=7443 (and optionally
+# PROBE_PUBLIC_HOST / PROBE_PUBLIC_PORT / LOCAL_PROBE) to the deploy .env, then rerun this script.
+# Without it the listener stays unreachable inside the container and nothing changes for existing setups.
+probe_port=$(read_setting PROBE_PORT)
+if [[ "$probe_port" =~ ^[0-9]+$ && "$probe_port" -ge 1 && "$probe_port" -le 65535 ]]; then
+  awk '
+    { print }
+    index($0, "- \"${PORT:?PORT must not be empty}:3000\"") { print "      - \"${PROBE_PORT}:${PROBE_PORT}\"" }
+    index($0, "MIHOMO_SECRET: ${MIHOMO_SECRET:?") {
+      print "      PROBE_PORT: ${PROBE_PORT}"
+      print "      PROBE_PUBLIC_HOST: ${PROBE_PUBLIC_HOST:-}"
+      print "      PROBE_PUBLIC_PORT: ${PROBE_PUBLIC_PORT:-}"
+      print "      LOCAL_PROBE: ${LOCAL_PROBE:-true}"
+    }
+  ' "$temporary_file" > "${temporary_file}.probe"
+  mv -- "${temporary_file}.probe" "$temporary_file"
+fi
 mv -- "$temporary_file" compose.deploy.yml
 temporary_file=''
 
 unset NODE_WATCHER_IMAGE PORT AUTH_USERNAME AUTH_PASSWORD AUTH_SESSION_SECRET
 unset AUTH_SESSION_TTL_HOURS AUTH_COOKIE_SECURE TRUST_PROXY
 unset MIHOMO_HTTP_PORT MIHOMO_SOCKS_PORT MIHOMO_CONTROLLER_PORT MIHOMO_SECRET
+unset PROBE_PORT PROBE_PUBLIC_HOST PROBE_PUBLIC_PORT LOCAL_PROBE
 unset DOCKER_DEFAULT_PLATFORM
 unset NODE_WATCHER_VOLUME_LABEL
 compose=("${compose_command[@]}" --project-name node-watcher --env-file "$deploy_dir/.env" -f "$deploy_dir/compose.deploy.yml")

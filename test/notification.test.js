@@ -1,3 +1,4 @@
+require('../test-support/isolate');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { NotificationService, escapeHtml } = require('../src/services/notification');
@@ -73,4 +74,51 @@ test('validates enabled channels and escapes message markup', () => {
   assert.match(validateSettings('bark', { enabled: true, url: 'not-a-url' }), /Bark/);
   assert.match(validateSettings('telegram', { enabled: true, botToken: '', chatId: '' }), /Telegram/);
   assert.equal(escapeHtml('<node & "test">'), '&lt;node &amp; &quot;test&quot;&gt;');
+});
+
+function recordingService() {
+  const calls = { get: [], post: [], mail: [] };
+  const service = new NotificationService({
+    config: { getConfig: () => ({ notifications: {
+      bark: { enabled: true, url: 'https://api.day.app/test-key' },
+      email: { enabled: true, host: 'smtp.example.com', port: 587, secure: false, auth: { user: 'u', pass: 'p' }, from: 'a@b.c', to: 'd@e.f' },
+      telegram: { enabled: true, botToken: 'bot-token', chatId: '1' }
+    } }) },
+    http: { get: async (...args) => { calls.get.push(args); }, post: async (...args) => { calls.post.push(args); } },
+    mailer: { createTransport: () => ({ sendMail: async value => { calls.mail.push(value); } }) }
+  });
+  return { service, calls };
+}
+
+test('several nodes are summarised in one message per channel and the list is capped', async () => {
+  const { service, calls } = recordingService();
+  const entries = Array.from({ length: 20 }, (_, i) => ({
+    node: { name: `Node ${i}`, server: `n${i}.example.com`, port: 443 }, status: { online: false, error: 'timeout' }
+  }));
+  const results = await service.sendBatchNotification('offline', entries);
+  assert.equal(results.length, 3);
+  assert.equal(calls.get.length, 1);
+  assert.equal(calls.post.length, 1);
+  assert.equal(calls.mail.length, 1);
+  assert.match(calls.mail[0].subject, /20 个节点/);
+  assert.match(calls.post[0][1].text, /另有 5 个节点/);
+  assert.match(calls.post[0][1].text, /Node 0/);
+  assert.doesNotMatch(calls.post[0][1].text, /Node 19/);
+  assert.deepEqual(await service.sendBatchNotification('offline', []), []);
+});
+
+test('the incident message explains that the monitor side is the likely cause', async () => {
+  const { service, calls } = recordingService();
+  await service.sendIncidentNotification({ failing: 9, total: 10 }, false);
+  assert.match(calls.post[0][1].text, /9\/10/);
+  assert.match(calls.post[0][1].text, /监控主机网络/);
+  await service.sendIncidentNotification({ failing: 1, total: 10 }, true);
+  assert.match(calls.mail[1].subject, /恢复/);
+});
+
+test('a failing channel is reported without blocking the others or throwing', async () => {
+  const { service, calls } = recordingService();
+  service.http = { get: async () => { throw new Error('bark down'); }, post: async (...args) => { calls.post.push(args); } };
+  const results = await service.sendNotification({ name: 'N', protocol: 'vless', server: 's', port: 1 }, { online: false, statusChanged: true });
+  assert.deepEqual(results.map(item => [item.service, item.success]), [['bark', false], ['email', true], ['telegram', true]]);
 });

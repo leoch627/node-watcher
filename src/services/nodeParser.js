@@ -237,24 +237,143 @@ function parseContent(content) {
   return { proxies, errors, format: 'links' };
 }
 
+// ---- region detection -------------------------------------------------------------------------
+// Airports put a flag emoji in the node name (🇯🇵 日本 01). Two regional-indicator symbols spell the ISO
+// 3166-1 alpha-2 code, so the flag is decoded rather than looked up. Names without a flag fall back to
+// common place names / codes.
+const FLAG_PATTERN = /[\u{1F1E6}-\u{1F1FF}]{2}/gu;
+let regionNames = null;
+try { regionNames = new Intl.DisplayNames(['en'], { type: 'region', fallback: 'none' }); } catch (_) { /* no ICU data */ }
+
+function isRegionCode(code) {
+  if (!/^[A-Z]{2}$/.test(code)) return false;
+  if (!regionNames) return true;
+  try { return Boolean(regionNames.of(code)); } catch (_) { return false; }
+}
+
+function normalizeRegionCode(code) {
+  return code === 'UK' ? 'GB' : code;
+}
+
+function flagToRegion(text) {
+  for (const match of String(text || '').matchAll(FLAG_PATTERN)) {
+    const code = [...match[0]].map(char => String.fromCharCode(char.codePointAt(0) - 0x1F1E6 + 65)).join('');
+    if (isRegionCode(code)) return normalizeRegionCode(code);
+  }
+  return null;
+}
+
+const code2 = value => `(?<![A-Za-z])(?:${value})(?![A-Za-z])`;
+const REGION_KEYWORDS = [
+  ['HK', new RegExp(`香港|Hong\\s?Kong|${code2('HK')}`, 'i')],
+  ['TW', new RegExp(`台湾|台灣|Taiwan|${code2('TW')}`, 'i')],
+  ['MO', /澳门|澳門|Macau|Macao/i],
+  ['JP', new RegExp(`日本|Japan|东京|東京|大阪|Tokyo|Osaka|${code2('JP')}`, 'i')],
+  ['KR', new RegExp(`韩国|韓國|Korea|首尔|首爾|Seoul|${code2('KR')}`, 'i')],
+  ['SG', new RegExp(`新加坡|狮城|Singapore|${code2('SG')}`, 'i')],
+  ['US', new RegExp(`美国|美國|United\\s?States|洛杉[矶磯]|[圣聖]荷?[何西]|西雅图|纽约|芝加哥|Los\\s?Angeles|San\\s?Jose|Seattle|${code2('US|USA')}`, 'i')],
+  ['GB', new RegExp(`英国|英國|United\\s?Kingdom|伦敦|倫敦|London|${code2('UK')}`, 'i')],
+  ['DE', new RegExp(`德国|德國|Germany|法兰克福|Frankfurt|${code2('DE')}`, 'i')],
+  ['FR', /法国|法國|France|巴黎|Paris/i],
+  ['CA', /加拿大|Canada|多伦多|温哥华/i],
+  ['AU', /澳大利亚|澳洲|Australia|悉尼|Sydney/i],
+  ['MY', /马来西亚|Malaysia/i],
+  ['TH', /泰国|泰國|Thailand|曼谷/i],
+  ['VN', /越南|Vietnam/i],
+  ['PH', /菲律宾|Philippines/i],
+  ['ID', /印度尼西亚|印尼|Indonesia/i],
+  ['IN', /印度(?!尼西亚)|India(?!n)/i],
+  ['RU', /俄罗斯|俄羅斯|Russia|莫斯科/i],
+  ['TR', /土耳其|Turkey|Türkiye/i],
+  ['AR', /阿根廷|Argentina/i],
+  ['BR', /巴西|Brazil/i],
+  ['NL', /荷兰|荷蘭|Netherlands|阿姆斯特丹/i],
+  ['CN', new RegExp(`中国大陆|中國大陸|中国|中國|${code2('CN')}`, 'i')]
+];
+
+// Subscription "info" entries (remaining traffic, expiry date, website...) are not real nodes.
+const INFO_NAME = /剩余|到期|过期|流量|套餐|重置|官网|网址|订阅|Traffic|Expire|Reset|Website/i;
+
+function detectRegion(name) {
+  const flag = flagToRegion(name);
+  if (flag) return { region: flag, regionSource: 'flag' };
+  if (INFO_NAME.test(String(name || ''))) return { region: null, regionSource: null };
+  for (const [region, pattern] of REGION_KEYWORDS) {
+    if (pattern.test(String(name || ''))) return { region, regionSource: 'name' };
+  }
+  return { region: null, regionSource: null };
+}
+
 function stableHash(value, length = 12) {
   return crypto.createHash('sha256').update(value).digest('hex').slice(0, length);
 }
 
-function toRuntimeNode(proxy, source) {
-  const normalized = normalizeClashProxy(proxy);
-  if (!normalized) return null;
-  const fingerprint = JSON.stringify({ sourceId: source.id, type: normalized.type, server: normalized.server,
-    port: normalized.port, uuid: normalized.uuid, password: normalized.password, name: normalized.name });
-  const id = stableHash(fingerprint);
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function baseFingerprint(normalized, source) {
+  return JSON.stringify({ sourceId: source.id, type: normalized.type, server: normalized.server,
+    port: normalized.port, uuid: normalized.uuid, password: normalized.password });
+}
+
+function buildRuntimeNode(normalized, source, id) {
   const displayName = normalized.name;
   const proxyName = `${displayName} · ${id.slice(0, 6)}`;
+  const { region, regionSource } = detectRegion(displayName);
   return {
-    id, name: displayName, proxyName, protocol: normalized.type, server: normalized.server,
+    id, name: displayName, proxyName, region, regionSource, protocol: normalized.type, server: normalized.server,
     address: normalized.server, port: normalized.port, subscription: source.name,
     source: { id: source.id, name: source.name, type: source.type },
     proxy: { ...normalized, name: proxyName }
   };
 }
 
-module.exports = { SUPPORTED_PROTOCOLS, decodeBase64, normalizeClashProxy, parseContent, parseUri, toRuntimeNode };
+// Node ids identify a node by source + protocol + endpoint + credentials and deliberately exclude the
+// display name: airports rename nodes (flags, tags, traffic notes) all the time, and a rename must not
+// reset the node's history or alert state.
+function toRuntimeNode(proxy, source) {
+  const normalized = normalizeClashProxy(proxy);
+  if (!normalized) return null;
+  return buildRuntimeNode(normalized, source, stableHash(baseFingerprint(normalized, source)));
+}
+
+// Same as toRuntimeNode for a whole source. When several entries share endpoint and credentials,
+// they are told apart by the rest of their configuration, then by name, and only entries that are
+// identical in every respect fall back to their position (so reordering can never swap two distinct
+// nodes' history; it can only swap entries that are indistinguishable anyway).
+function toRuntimeNodes(proxies, source) {
+  const entries = proxies.map(proxy => normalizeClashProxy(proxy)).filter(Boolean)
+    .map(normalized => ({ normalized, base: baseFingerprint(normalized, source) }));
+  const count = key => entries.reduce((map, entry) => map.set(entry[key], (map.get(entry[key]) || 0) + 1), new Map());
+  const baseCounts = count('base');
+  for (const entry of entries) {
+    const { name, ...rest } = entry.normalized;
+    entry.config = `${entry.base}|cfg:${stableHash(stableStringify(rest), 16)}`;
+    entry.named = `${entry.config}|name:${name}`;
+  }
+  const configCounts = count('config');
+  const namedCounts = count('named');
+  const seen = new Map();
+  return entries.map(entry => {
+    let key = entry.base;
+    if (baseCounts.get(entry.base) > 1) {
+      key = entry.config;
+      if (configCounts.get(entry.config) > 1) {
+        key = entry.named;
+        if (namedCounts.get(entry.named) > 1) {
+          const occurrence = seen.get(entry.named) || 0;
+          seen.set(entry.named, occurrence + 1);
+          key = `${entry.named}#${occurrence}`;
+        }
+      }
+    }
+    return buildRuntimeNode(entry.normalized, source, stableHash(key));
+  });
+}
+
+module.exports = { SUPPORTED_PROTOCOLS, decodeBase64, normalizeClashProxy, parseContent, parseUri, toRuntimeNode, toRuntimeNodes, detectRegion, flagToRegion };

@@ -6,6 +6,9 @@ services:
     container_name: node-watcher
     ports:
       - "3000:3000"
+      # TLS listener for remote probes. To disable probes, delete this line (the listener is then
+      # unreachable from outside the container). PROBE_HOST_PORT changes the published host port.
+      - "${PROBE_HOST_PORT:-7443}:7443"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -22,6 +25,11 @@ services:
       MIHOMO_SOCKS_PORT: ${MIHOMO_SOCKS_PORT:-23334}
       MIHOMO_CONTROLLER_PORT: ${MIHOMO_CONTROLLER_PORT:-23335}
       MIHOMO_SECRET: ${MIHOMO_SECRET:-node-watcher-secret}
+      PROBE_PORT: 7443
+      PROBE_PUBLIC_HOST: ${PROBE_PUBLIC_HOST:-}
+      PROBE_PUBLIC_PORT: ${PROBE_PUBLIC_PORT:-${PROBE_HOST_PORT:-7443}}
+      LOCAL_PROBE: ${LOCAL_PROBE:-true}
+      LOCAL_PROBE_NAME: ${LOCAL_PROBE_NAME:-}
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped

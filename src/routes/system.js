@@ -42,57 +42,54 @@ router.get('/config', (req, res) => {
   }
 });
 
-// Update monitoring settings
+// Update monitoring settings. Every provided field is validated first; nothing is applied unless all are valid.
+const INTEGER_FIELDS = [
+  ['checkIntervalMinutes', 1, 1440, 'Check interval'],
+  ['timeoutSeconds', 1, 120, 'Timeout'],
+  ['retryAttempts', 0, 3, 'Retry attempts'],
+  ['failureThreshold', 1, 10, 'Failure threshold'],
+  ['subscriptionRefreshMinutes', 1, 1440, 'Subscription refresh interval'],
+  ['concurrency', 1, 32, 'Concurrency']
+];
+
 router.put('/monitoring', (req, res) => {
   try {
-    const { checkIntervalMinutes, timeoutSeconds, retryAttempts, concurrency, customHealthCheckUrl } = req.body;
+    const body = req.body || {};
+    const updates = {};
+
+    for (const [key, min, max, label] of INTEGER_FIELDS) {
+      if (body[key] === undefined || body[key] === null || body[key] === '') continue;
+      const value = Number(body[key]);
+      if (!Number.isInteger(value) || value < min || value > max) {
+        return res.status(400).json({
+          success: false,
+          error: `${label} must be an integer between ${min} and ${max}`
+        });
+      }
+      updates[key] = value;
+    }
+
+    if (body.customHealthCheckUrl !== undefined) {
+      const url = String(body.customHealthCheckUrl || '').trim();
+      if (url) {
+        let parsed;
+        try { parsed = new URL(url); } catch (_) { parsed = null; }
+        if (!parsed || !['http:', 'https:'].includes(parsed.protocol)) {
+          return res.status(400).json({
+            success: false,
+            error: 'Custom health check URL must be a valid HTTP or HTTPS URL'
+          });
+        }
+      }
+      updates.customHealthCheckUrl = url;
+    }
+
     const cfg = config.getConfig();
-
-    if (checkIntervalMinutes) {
-      const interval = parseInt(checkIntervalMinutes, 10);
-      if (isNaN(interval) || interval < 1) {
-        return res.status(400).json({
-          success: false,
-          error: 'Check interval must be a positive number'
-        });
-      }
-      cfg.monitoring.checkIntervalMinutes = interval;
-    }
-    if (timeoutSeconds) {
-      const timeout = parseInt(timeoutSeconds, 10);
-      if (isNaN(timeout) || timeout < 1) {
-        return res.status(400).json({
-          success: false,
-          error: 'Timeout must be a positive number'
-        });
-      }
-      cfg.monitoring.timeoutSeconds = timeout;
-    }
-    if (retryAttempts !== undefined) {
-      const retries = parseInt(retryAttempts, 10);
-      if (isNaN(retries) || retries < 0) {
-        return res.status(400).json({
-          success: false,
-          error: 'Retry attempts must be a non-negative number'
-        });
-      }
-      cfg.monitoring.retryAttempts = retries;
-    }
-    if (concurrency !== undefined) {
-      const value = parseInt(concurrency, 10);
-      if (isNaN(value) || value < 1 || value > 32) {
-        return res.status(400).json({ success: false, error: 'Concurrency must be between 1 and 32' });
-      }
-      cfg.monitoring.concurrency = value;
-    }
-    if (customHealthCheckUrl !== undefined) {
-      cfg.monitoring.customHealthCheckUrl = customHealthCheckUrl;
-    }
-
+    cfg.monitoring = { ...(cfg.monitoring || {}), ...updates };
     config.updateConfig(cfg);
 
-    // Restart monitoring with new interval
-    if (checkIntervalMinutes) {
+    // Restart the timers when either interval changed
+    if (updates.checkIntervalMinutes !== undefined || updates.subscriptionRefreshMinutes !== undefined) {
       schedulerService.startMonitoring();
     }
 
