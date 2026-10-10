@@ -30,3 +30,31 @@ platform with the node's exit IP, because the relevant resolver is on the proxy
 server. The upstream `check.sh` revision consulted on 2026-10-09 had SHA-256:
 
 `a86f9330744ed05cbd110d76d606ddf0aedbcdf6e160f99c28e6ad07fd214359`
+
+## miaospeed
+
+Deep tests (latency, speed, UDP NAT type, topology) run on
+[AirportR/miaospeed](https://github.com/AirportR/miaospeed), the maintained fork
+of [miaokobot/miaospeed](https://github.com/miaokobot/miaospeed), licensed under
+the GNU Affero General Public License v3.0. The Docker image and
+`npm run setup:bin` install the unmodified release binary (version pinned in
+`Dockerfile` and `scripts/setup-binaries.js`, verified by SHA-256).
+`src/miaospeed/protocol.js` implements its websocket protocol (request
+signing, the msr-v1 reverse-connection handshake and result decoding) as
+described in its source; the default request configuration mirrors its
+`preconfigs/network.go`. The public build token in `protocol.js` is the one
+the miaospeed README publishes for its release binaries.
+
+## Twemoji
+
+`src/assets/flags.json` contains the country-flag graphics of
+[Twemoji](https://github.com/jdecked/twemoji) (© Twitter, Inc and other
+contributors), licensed under CC-BY 4.0
+(https://creativecommons.org/licenses/by/4.0/), taken from the npm package
+`@twemoji/svg` 15.0.0 (MIT, © 2023 Samuel Kopp; tarball integrity
+`sha512-ZSPef2B6nBaYnfgdTbAy4jgW95o7pi2xPGwGCU+WMTxo7J6B1lMPTWwSq/wTuiMq+N0khQ90CcvYp1wFoQpo/w==`).
+The SVGs were only minified (whitespace) and keyed by ISO 3166 code.
+
+The report layouts follow the result images of the Koipy and
+[FullTClash](https://github.com/AirportR/fulltclash) Telegram bots; no code was
+taken from either.

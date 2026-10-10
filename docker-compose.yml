@@ -30,6 +30,9 @@ services:
       PROBE_PUBLIC_PORT: ${PROBE_PUBLIC_PORT:-${PROBE_HOST_PORT:-7443}}
       LOCAL_PROBE: ${LOCAL_PROBE:-true}
       LOCAL_PROBE_NAME: ${LOCAL_PROBE_NAME:-}
+      # miaospeed backends: address reverse backends dial (wss://your-domain) and optional GeoIP mmdb files
+      MIAOSPEED_PUBLIC_URL: ${MIAOSPEED_PUBLIC_URL:-}
+      MIAOSPEED_MMDB: ${MIAOSPEED_MMDB:-}
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped

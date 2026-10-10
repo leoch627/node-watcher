@@ -17,6 +17,8 @@ Node Watcher 使用 Mihomo 执行代理检测，提供 Web 管理界面、状态
 | 检测报告 | 将当前节点状态和服务检测结果生成 PNG 矩阵，可预览、下载 |
 | 登录保护 | 管理员登录、签名会话 Cookie、登录失败限速 |
 | 分布式探针 | 主控部署在公网，探针部署在不同网络，通过 TLS 私有协议连回主控，用同一份订阅从多个地点检测并对比 |
+| 深度测试 | 基于 [miaospeed](https://github.com/AirportR/miaospeed) 的延迟 RTT / HTTP 延迟、UDP NAT 类型、下载测速和入口 / 出口拓扑分析，生成 Koipy / FullTClash 风格的 PNG 报告 |
+| miaospeed 后端 | 主控自带的本机 miaospeed，加上正向（填地址和 token，可接入给 Koipy 用的已有后端）和反向（NAT 后的机器主动连回主控，无需开放端口）后端 |
 
 ## 快速开始
 
@@ -422,6 +424,31 @@ NODE_WATCHER_MODE=agent NODE_WATCHER_JOIN='nwp://...' npm start
 - 用强密码；`AUTH_SESSION_SECRET` 留空时会生成随机密钥保存在 `data/.session-secret`。
 - 订阅 token、节点凭据会通过加密通道下发给探针，探针机器同样要可信。
 
+## 深度测试与 miaospeed 后端
+
+「深度测试」标签页在 miaospeed 后端上运行三类测试，结果可预览、按延迟或速度排序、下载 PNG，最近 30 次保存在 `data/deep-tests/`：
+
+| 测试 | 内容 |
+| --- | --- |
+| 延迟测试 | 延迟 RTT（TLS 握手后首包往返）、HTTP 延迟（含建连）、UDP NAT 类型（RFC 5780 STUN） |
+| 测速 | 在延迟测试基础上逐节点下载测速：平均 / 最大速度与每秒速度曲线；时长、线程和测速文件可选 |
+| 拓扑分析 | 入口与出口 IP 的地区、ASN 和组织，入口按 IP 归组，出口按落地 IP 聚类（「簇」表示落地复用） |
+
+> 测速会消耗大量流量：每个节点约为「时长 × 带宽」，千兆节点测 5 秒约 600 MB。请手动运行，不要频繁测速。
+
+后端在「设置 → miaospeed 后端」中管理：
+
+- **本机**：主控自动启动的 miaospeed，只监听 `127.0.0.1`，每次启动使用随机 token。Docker 镜像已内置；源码运行时执行 `npm run setup:bin` 按平台下载官方发布版（Linux / 树莓派 armv6、armv7、arm64 / macOS / Windows，下载后校验 SHA-256；国内可加 `GITHUB_MIRROR=https://ghfast.top/`）。
+- **正向**：主控连接一个已在运行的 `miaospeed server`，填写 `ws://` / `wss://` 地址和 token；自签证书可填 SHA-256 指纹锁定，自行编译的 miaospeed 可填编译 token。
+- **反向**：添加后面板给出部署命令，目标机器上的 miaospeed 以 `-connect` 主动连到主控 `/miaospeed/reverse/<ID>`，不需要开放端口：
+
+```bash
+docker run -d --name miaospeed --restart unless-stopped airportr/miaospeed:4.7.8 \
+  server -connect 'wss://你的域名/miaospeed/reverse/<ID>' -token '<token>'
+```
+
+反向连接复用面板的 Web 端口。测试任务里包含节点密码，公网请通过 HTTPS 反向代理（有效证书）访问主控并设置 `MIAOSPEED_PUBLIC_URL=wss://你的域名`；miaospeed 只校验系统信任的证书，不支持自签证书指纹。不加密的 `ws://` 只建议在局域网使用。
+
 ## 配置说明
 
 登录与 Mihomo 启动参数由环境变量控制；订阅、导入内容、检测设置和通知渠道保存在配置文件中，可通过面板管理。
@@ -454,6 +481,12 @@ NODE_WATCHER_MODE=agent NODE_WATCHER_JOIN='nwp://...' npm start
 | `MIHOMO_SOCKS_PORT` | HTTP 端口 + 1 | `.env.example` 和 Compose 中为 `23334` |
 | `MIHOMO_CONTROLLER_PORT` | HTTP 端口 + 2 | `.env.example` 和 Compose 中为 `23335` |
 | `MIHOMO_SECRET` | `node-watcher-secret` | Mihomo 控制接口密钥 |
+| `MIAOSPEED_LOCAL` | `true` | 设为 `false` 不启动本机 miaospeed |
+| `MIAOSPEED_BIN` | 依次查找 `./bin/miaospeed`、`/usr/local/bin/miaospeed`、`PATH` | miaospeed 可执行文件路径 |
+| `MIAOSPEED_PORT` | `23380` | 本机 miaospeed 监听的回环端口 |
+| `MIAOSPEED_MMDB` | 无 | 本地 GeoIP 数据库（MaxMind 格式，如 DB-IP Lite / GeoLite2 的 City 与 ASN，逗号分隔）；未设置时拓扑分析在线查询 |
+| `MIAOSPEED_PUBLIC_URL` | 按访问面板的地址推断 | 反向后端连接主控使用的地址，如 `wss://monitor.example.com` |
+| `MIAOSPEED_IMAGE` | `airportr/miaospeed:4.7.8` | 面板生成的 Docker 部署命令使用的镜像 |
 | `LOG_CONSOLE` | `true` | 日志同时输出到控制台（`docker logs` 可见）；设为 `false` 只写 `logs/` 文件 |
 
 ### 登录与访问边界
@@ -614,6 +647,14 @@ docker buildx build \
 | `POST` | `/api/probes/:id/rotate` | 重置探针密钥，返回新的加入串 |
 | `PATCH` | `/api/probes/:id` | 改名或启用 / 停用 `{"name":"…","enabled":false}` |
 | `DELETE` | `/api/probes/:id` | 删除探针及其历史 |
+| `GET` | `/api/backends` | miaospeed 后端列表与状态（不含 token） |
+| `POST` | `/api/backends` | 添加后端：`{"type":"reverse","name":"…"}` 返回部署命令；`{"type":"forward","name":"…","url":"wss://…","token":"…"}` |
+| `POST` | `/api/backends/:id/rotate` | 重置反向后端 token，返回新的部署命令 |
+| `PATCH` / `DELETE` | `/api/backends/:id` | 改名、启用 / 停用、修改正向地址；删除后端 |
+| `GET` | `/api/deep-tests` | 当前任务、测试记录与可用后端 |
+| `POST` | `/api/deep-tests` | 开始测试：`{"preset":"latency|speed|topology","backendId":"…","sourceId":"…","include":"正则","exclude":"正则","options":{"downloadDuration":5,"downloadThreading":1}}` |
+| `GET` | `/api/deep-tests/:id/report.png` | 测试报告 PNG；`?sort=rtt|http|speed` 排序，`&download=1` 下载 |
+| `POST` | `/api/deep-tests/:id/cancel` | 停止正在运行的测试 |
 
 ## 常见问题
 

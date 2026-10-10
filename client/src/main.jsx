@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  Activity, Bell, Check, ChevronDown, Copy, Download, FileImage, Gauge, Globe2, Import, KeyRound,
-  LoaderCircle, LockKeyhole, LogIn, LogOut, Mail, Play, Plus, Radar, RefreshCw, Search,
-  Send, Server, Settings2, Smartphone, Trash2, X
+  Activity, Bell, Cable, Check, ChevronDown, Copy, Download, FileImage, Gauge, Globe2, Import, KeyRound,
+  LoaderCircle, LockKeyhole, LogIn, LogOut, Mail, Network, Play, Plus, Radar, RefreshCw, Search,
+  Send, Server, Settings2, Smartphone, Square, Timer, Trash2, X, Zap
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -177,6 +177,165 @@ function ProbesSection({ notify, onChanged }) {
       <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>部署探针：{join?.probe?.name}</DialogTitle><DialogDescription>在目标网络里的机器上运行下面任一命令，探针连上后会自动加入检测。</DialogDescription></DialogHeader>{join && <JoinDetails info={join} notify={notify} />}<DialogFooter><Button onClick={() => setJoin(null)}>完成</Button></DialogFooter></DialogContent>
     </Dialog>
   </section>;
+}
+
+function Select({ value, onChange, children, className = '', ...props }) {
+  return <div className={`relative ${className}`}><select className="h-9 w-full appearance-none rounded-md border bg-background pl-3 pr-8 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" value={value} onChange={e => onChange(e.target.value)} {...props}>{children}</select><ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 size-4 text-muted-foreground" /></div>;
+}
+
+const backendTypeLabels = { local: '本机', forward: '正向', reverse: '反向' };
+
+function BackendState({ backend }) {
+  if (!backend.enabled) return <Badge variant="outline">已停用</Badge>;
+  if (backend.online) return <Badge variant="success">在线{backend.type === 'reverse' && backend.sessions > 1 ? ` ×${backend.sessions}` : ''}</Badge>;
+  if (backend.online === false) return <Tooltip content={backend.error || '未连接'}><span><Badge variant="danger">离线</Badge></span></Tooltip>;
+  return <Badge variant="outline">检测中</Badge>;
+}
+
+function ConnectDetails({ info, notify }) {
+  return <div className="grid gap-4">
+    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">token 只显示这一次。每台机器运行一个 miaospeed，主动连接主控，自身不需要开放端口；丢失 token 后可重置。</div>
+    {!info.secure && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">当前地址是不加密的 ws://，测试任务里包含节点密码，只建议在局域网使用。公网请让主控通过 HTTPS 访问（域名 + Let's Encrypt 证书），或设置 MIAOSPEED_PUBLIC_URL=wss://你的域名。</div>}
+    <CopyField label="Docker（支持 amd64 / arm64 / 树莓派 armv7）" value={info.docker} notify={notify} />
+    <CopyField label="Linux / macOS 二进制" value={info.binary} notify={notify} />
+    <CopyField label="Windows" value={info.windows} notify={notify} />
+  </div>;
+}
+
+function BackendsSection({ notify }) {
+  const [data, setData] = useState({ backends: [], reverseBase: '' });
+  const [busy, setBusy] = useState('');
+  const [connect, setConnect] = useState(null);
+  const [adding, setAdding] = useState(null);
+  const [form, setForm] = useState({ name: '', url: '', token: '', buildToken: '', fingerprint: '' });
+  const load = async () => { try { setData(await api('/api/backends')); } catch (error) { notify(error.message, true); } };
+  useEffect(() => { load(); const timer = setInterval(load, 10000); return () => clearInterval(timer); }, []);
+  const act = async (key, run) => { setBusy(key); try { await run(); await load(); } catch (error) { notify(error.message, true); } finally { setBusy(''); } };
+  const create = event => {
+    event.preventDefault();
+    act('create', async () => {
+      const body = adding === 'reverse' ? { type: 'reverse', name: form.name } : { type: 'forward', ...form };
+      const result = await api('/api/backends', { method: 'POST', body: JSON.stringify(body) });
+      setAdding(null); setForm({ name: '', url: '', token: '', buildToken: '', fingerprint: '' });
+      if (result.url) setConnect(result); else notify('后端已添加');
+    });
+  };
+  const rotate = backend => { if (!confirm(`重置“${backend.name}”的 token？正在运行的 miaospeed 需要用新命令重新启动。`)) return; act(backend.id, async () => setConnect(await api(`/api/backends/${backend.id}/rotate`, { method: 'POST', body: '{}' }))); };
+  const remove = backend => { if (!confirm(`删除后端“${backend.name}”？`)) return; act(backend.id, () => api(`/api/backends/${backend.id}`, { method: 'DELETE' })); };
+  const toggle = backend => act(backend.id, () => api(`/api/backends/${backend.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: !backend.enabled }) }));
+  const field = key => ({ value: form[key], onChange: e => setForm(current => ({ ...current, [key]: e.target.value })) });
+  return <section className="border-b pb-8 pt-8">
+    <div className="mb-2 flex items-center gap-2"><Cable className="size-4" /><h2 className="text-base font-semibold">miaospeed 后端</h2></div>
+    <p className="mb-5 text-sm text-muted-foreground">深度测试在这些后端上运行。正向：填写已有 miaospeed 的地址和 token（例如给 Koipy 用的后端）；反向：在 NAT 后的机器上运行 miaospeed，主动连接主控 {data.reverseBase && <span className="font-mono text-xs">{data.reverseBase}</span>}。</p>
+    <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[680px] text-sm">
+      <thead className="bg-muted/60 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-2.5 font-medium">名称</th><th className="px-4 py-2.5 font-medium">类型</th><th className="px-4 py-2.5 font-medium">状态</th><th className="px-4 py-2.5 font-medium">版本 / 地址</th><th className="px-4 py-2.5 font-medium">启用</th><th className="w-24 px-3 py-2.5"></th></tr></thead>
+      <tbody>{data.backends.length === 0 && <EmptyRow columns={6}>没有可用后端（本机 miaospeed 未安装）</EmptyRow>}{data.backends.map(backend => <tr key={backend.id} className="border-t">
+        <td className="px-4 py-3"><div className="font-medium">{backend.name}</div><div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{backend.id}</div></td>
+        <td className="px-4 py-3"><Badge variant="outline">{backendTypeLabels[backend.type]}</Badge></td>
+        <td className="px-4 py-3"><BackendState backend={backend} />{backend.type === 'reverse' && !backend.online && backend.lastSeen && <div className="mt-1 text-[11px] text-muted-foreground">最后在线 {formatTime(backend.lastSeen)}</div>}</td>
+        <td className="px-4 py-3 font-mono text-xs text-muted-foreground"><div>{backend.version || '-'}</div><div className="max-w-64 truncate">{backend.url || backend.remote || ''}</div></td>
+        <td className="px-4 py-3">{backend.type !== 'local' ? <Switch checked={backend.enabled} onCheckedChange={() => toggle(backend)} disabled={busy === backend.id} aria-label="启用后端" /> : <span className="text-muted-foreground">-</span>}</td>
+        <td className="px-3 py-3">{backend.type !== 'local' && <div className="flex justify-end gap-1">{backend.type === 'reverse' && <Tooltip content="重置 token"><Button size="icon" variant="ghost" onClick={() => rotate(backend)} disabled={Boolean(busy)}><KeyRound /></Button></Tooltip>}<Tooltip content="删除"><Button size="icon" variant="ghost" onClick={() => remove(backend)} disabled={Boolean(busy)}><Trash2 /></Button></Tooltip></div>}</td>
+      </tr>)}</tbody>
+    </table></div>
+    <div className="mt-4 flex flex-wrap gap-2"><Button variant="outline" onClick={() => setAdding('reverse')}><Plus />添加反向后端</Button><Button variant="outline" onClick={() => setAdding('forward')}><Plus />添加正向后端</Button></div>
+    <Dialog open={Boolean(adding)} onOpenChange={open => { if (!open) setAdding(null); }}>
+      <DialogContent><form onSubmit={create} className="grid gap-4"><DialogHeader><DialogTitle>{adding === 'reverse' ? '添加反向后端' : '添加正向后端'}</DialogTitle><DialogDescription>{adding === 'reverse' ? '创建后会给出在目标机器上运行 miaospeed 的命令。' : '主控主动连接一个已在运行的 miaospeed server。'}</DialogDescription></DialogHeader>
+        <label className="grid gap-2 text-sm font-medium">名称<Input {...field('name')} placeholder="例如：上海联通" maxLength={40} required /></label>
+        {adding === 'forward' && <>
+          <label className="grid gap-2 text-sm font-medium">地址<Input {...field('url')} placeholder="wss://example.com:8765/path" required /></label>
+          <label className="grid gap-2 text-sm font-medium">token<Input {...field('token')} type="password" autoComplete="off" required /></label>
+          <label className="grid gap-2 text-sm font-medium">证书指纹（可选，自签证书时填写 SHA-256）<Input {...field('fingerprint')} placeholder="留空则按域名校验证书" /></label>
+          <label className="grid gap-2 text-sm font-medium">编译 token（可选，自行编译的 miaospeed 才需要）<Input {...field('buildToken')} autoComplete="off" /></label>
+        </>}
+        <DialogFooter><Button type="button" variant="outline" onClick={() => setAdding(null)}>取消</Button><Button disabled={busy === 'create'}>{busy === 'create' ? <LoaderCircle className="animate-spin" /> : <Plus />}添加</Button></DialogFooter>
+      </form></DialogContent>
+    </Dialog>
+    <Dialog open={Boolean(connect)} onOpenChange={open => { if (!open) setConnect(null); }}>
+      <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>部署后端：{connect?.backend?.name}</DialogTitle><DialogDescription>在目标机器上运行下面任一命令，miaospeed 连上主控后即可在深度测试中选择它。</DialogDescription></DialogHeader>{connect && <ConnectDetails info={connect} notify={notify} />}<DialogFooter><Button onClick={() => setConnect(null)}>完成</Button></DialogFooter></DialogContent>
+    </Dialog>
+  </section>;
+}
+
+const presetIcons = { latency: Timer, speed: Gauge, topology: Network };
+const statusLabels = { running: '进行中', completed: '完成', failed: '失败', cancelled: '已取消' };
+const statusVariants = { running: 'outline', completed: 'success', failed: 'danger', cancelled: 'warning' };
+
+function DeepTestView({ subscriptions, imports, notify }) {
+  const [data, setData] = useState({ current: null, history: [], presets: {}, backends: [], downloadSources: [] });
+  const [preset, setPreset] = useState(() => readStored('nw-deep-preset', 'latency'));
+  const [backendId, setBackendId] = useState(() => readStored('nw-deep-backend', ''));
+  const [sourceId, setSourceId] = useState('');
+  const [include, setInclude] = useState('');
+  const [exclude, setExclude] = useState('');
+  const [speed, setSpeed] = useState({ downloadDuration: 5, downloadThreading: 1, downloadSource: 'auto' });
+  const [viewId, setViewId] = useState(null);
+  const [sort, setSort] = useState('');
+  const [busy, setBusy] = useState(false);
+  const running = data.current?.status === 'running';
+  const load = async () => { try { setData(await api('/api/deep-tests')); } catch (error) { notify(error.message, true); } };
+  useEffect(() => { load(); }, []);
+  useEffect(() => { const timer = setInterval(load, running ? 1500 : 10000); return () => clearInterval(timer); }, [running]);
+  const backends = data.backends.filter(item => item.enabled);
+  const backend = backends.find(item => item.id === backendId) || backends.find(item => item.online) || backends[0];
+  const shown = data.history.find(item => item.id === viewId) || data.history[0];
+  const start = async () => {
+    if (preset === 'speed' && !confirm('测速会消耗大量流量（每个节点约 时长 × 带宽，千兆节点 5 秒约 600MB），确定开始？')) return;
+    setBusy(true);
+    try {
+      writeStored('nw-deep-preset', preset); if (backend) writeStored('nw-deep-backend', backend.id);
+      await api('/api/deep-tests', { method: 'POST', body: JSON.stringify({ preset, backendId: backend?.id, sourceId: sourceId || undefined, include, exclude, options: preset === 'speed' ? speed : {} }) });
+      setViewId(null); await load();
+    } catch (error) { notify(error.message, true); } finally { setBusy(false); }
+  };
+  const cancel = async () => { try { await api(`/api/deep-tests/${data.current.id}/cancel`, { method: 'POST', body: '{}' }); await load(); } catch (error) { notify(error.message, true); } };
+  const remove = async item => { if (!confirm('删除这条测试记录？')) return; try { await api(`/api/deep-tests/${item.id}`, { method: 'DELETE' }); if (viewId === item.id) setViewId(null); await load(); } catch (error) { notify(error.message, true); } };
+  const reportUrl = item => `/api/deep-tests/${item.id}/report.png?t=${encodeURIComponent(item.finishedAt || '')}${sort ? `&sort=${sort}` : ''}`;
+  const sources = [...subscriptions.map(item => ({ id: item.id, name: item.name })), ...imports.map(item => ({ id: item.id, name: item.name }))];
+  const current = data.current;
+  return <div className="grid gap-6">
+    <section className="grid gap-4 rounded-md border p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {Object.entries(data.presets).map(([key, label]) => { const Icon = presetIcons[key] || Zap; return <Button key={key} variant={preset === key ? 'default' : 'outline'} onClick={() => setPreset(key)} disabled={running}><Icon />{label}</Button>; })}
+        <span className="ml-auto text-xs text-muted-foreground">{preset === 'latency' ? '延迟RTT / HTTP延迟 / UDP NAT 类型' : preset === 'speed' ? '下载测速 + 延迟 + UDP 类型' : '入口与出口的地区、ASN、组织，按落地 IP 聚类'}</span>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">后端<Select value={backend?.id || ''} onChange={setBackendId} disabled={running}>{backends.length === 0 && <option value="">没有可用后端</option>}{backends.map(item => <option key={item.id} value={item.id}>{item.name}{[item.type !== 'local' && backendTypeLabels[item.type], !item.online && '离线'].filter(Boolean).map(text => `（${text}）`).join('')}</option>)}</Select></label>
+        <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">来源<Select value={sourceId} onChange={setSourceId} disabled={running}><option value="">全部来源</option>{sources.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></label>
+        <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">包含（关键字或正则）<Input value={include} onChange={e => setInclude(e.target.value)} placeholder="例如：香港|HK" disabled={running} /></label>
+        <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">排除<Input value={exclude} onChange={e => setExclude(e.target.value)} placeholder="例如：剩余|到期" disabled={running} /></label>
+      </div>
+      {preset === 'speed' && <div className="grid gap-3 sm:grid-cols-3">
+        <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">每节点时长（秒）<Input type="number" min={1} max={30} value={speed.downloadDuration} onChange={e => setSpeed(s => ({ ...s, downloadDuration: Number(e.target.value) }))} disabled={running} /></label>
+        <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">线程<Input type="number" min={1} max={32} value={speed.downloadThreading} onChange={e => setSpeed(s => ({ ...s, downloadThreading: Number(e.target.value) }))} disabled={running} /></label>
+        <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">测速文件<Select value={speed.downloadSource} onChange={value => setSpeed(s => ({ ...s, downloadSource: value }))} disabled={running}>{(data.downloadSources.length ? data.downloadSources : ['auto']).map(key => <option key={key} value={key}>{{ auto: '自动（微软/谷歌）', fast: 'Fast.com', cloudflare: 'Cloudflare', cachefly: 'CacheFly' }[key] || key}</option>)}</Select></label>
+      </div>}
+      <div className="flex flex-wrap items-center gap-2">
+        {running ? <Button variant="outline" onClick={cancel}><Square />停止</Button> : <Button onClick={start} disabled={busy || !backend}>{busy ? <LoaderCircle className="animate-spin" /> : <Play />}开始测试</Button>}
+        {preset === 'speed' && !running && <span className="text-xs text-amber-700">测速会消耗大量流量，请勿频繁运行</span>}
+      </div>
+      {current && running && <div className="rounded-md border bg-muted/40 p-3"><div className="flex items-center justify-between text-sm"><span className="flex min-w-0 items-center gap-2"><LoaderCircle className="size-4 shrink-0 animate-spin" /><span className="truncate">{current.backend.name} · {current.label} · {current.current ? `已完成 ${current.current}` : current.queuing ? `排队中（前面 ${current.queuing} 个任务）` : '等待结果'}</span></span><span className="ml-4 shrink-0 font-mono text-xs">{current.completed}/{current.total}</span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200"><div className="h-full bg-zinc-800 transition-all" style={{ width: `${current.total ? current.completed / current.total * 100 : 0}%` }} /></div></div>}
+      {current && !running && current.status === 'failed' && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">上次测试失败：{current.error}</div>}
+    </section>
+    {shown && <section>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div><h2 className="text-base font-semibold">{shown.label} · {shown.backend.name}</h2><p className="mt-1 text-xs text-muted-foreground">{formatTime(shown.startedAt)} · {shown.nodeCount} 个节点 · {Math.round((shown.durationMs || 0) / 1000)}s{shown.status !== 'completed' ? ` · ${statusLabels[shown.status]} ${shown.completed}/${shown.total}` : ''}</p></div>
+        <div className="flex gap-2">{shown.preset !== 'topology' && <Select value={sort} onChange={setSort} className="w-36"><option value="">订阅原序</option><option value="rtt">按延迟RTT</option><option value="http">按HTTP延迟</option>{shown.preset === 'speed' && <option value="speed">按平均速度</option>}</Select>}<Button asChild><a href={`${reportUrl(shown)}&download=1`} download><Download />下载 PNG</a></Button></div>
+      </div>
+      <div className="overflow-auto rounded-md border bg-muted/20 p-2"><img key={reportUrl(shown)} src={reportUrl(shown)} alt={`${shown.label}报告`} className="mx-auto max-w-full" /></div>
+    </section>}
+    <section>
+      <h2 className="mb-3 text-base font-semibold">测试记录</h2>
+      <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[640px] text-sm">
+        <thead className="bg-muted/60 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-2.5 font-medium">时间</th><th className="px-4 py-2.5 font-medium">类型</th><th className="px-4 py-2.5 font-medium">后端</th><th className="px-4 py-2.5 font-medium">节点</th><th className="px-4 py-2.5 font-medium">状态</th><th className="px-4 py-2.5 font-medium">耗时</th><th className="w-16 px-3 py-2.5"></th></tr></thead>
+        <tbody>{data.history.length === 0 && <EmptyRow columns={7}>还没有测试记录</EmptyRow>}{data.history.map(item => <tr key={item.id} className={`cursor-pointer border-t hover:bg-muted/40 ${shown?.id === item.id ? 'bg-muted/50' : ''}`} onClick={() => setViewId(item.id)}>
+          <td className="px-4 py-2.5 tabular-nums">{formatTime(item.startedAt)}</td><td className="px-4 py-2.5">{item.label}</td><td className="px-4 py-2.5">{item.backend.name}</td><td className="px-4 py-2.5 tabular-nums">{item.nodeCount}</td>
+          <td className="px-4 py-2.5"><Badge variant={statusVariants[item.status] || 'outline'}>{statusLabels[item.status] || item.status}</Badge></td><td className="px-4 py-2.5 tabular-nums">{Math.round((item.durationMs || 0) / 1000)}s</td>
+          <td className="px-3 py-2.5" onClick={event => event.stopPropagation()}><Tooltip content="删除"><Button size="icon" variant="ghost" onClick={() => remove(item)}><Trash2 /></Button></Tooltip></td>
+        </tr>)}</tbody>
+      </table></div>
+    </section>
+  </div>;
 }
 
 function EmptyRow({ columns, children }) {
@@ -411,6 +570,7 @@ function SettingsView({ config, notifications, onSaved, notify }) {
       <Button className="mt-6" type="submit" disabled={Boolean(saving)}>{saving === 'monitoring' ? <LoaderCircle className="animate-spin" /> : <Check />}保存检测设置</Button>
     </form>
 
+    <BackendsSection notify={notify} />
     {probesSection}
 
     <section className="pt-8">
@@ -559,7 +719,7 @@ function App() {
       </section>
       {mediaJob?.status === 'running' && <div className="mb-5 rounded-md border bg-muted/40 p-3"><div className="flex items-center justify-between text-sm"><span className="flex min-w-0 items-center gap-2"><LoaderCircle className="size-4 shrink-0 animate-spin" /><span className="truncate">{probes.length > 1 && mediaJob.probeId ? `${probes.find(item => item.id === mediaJob.probeId)?.name || mediaJob.probeId} · ` : ''}正在检测 {mediaJob.currentNode || '节点'}</span></span><span className="ml-4 shrink-0 font-mono text-xs">{mediaJob.completed}/{mediaJob.total}</span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200"><div className="h-full bg-zinc-800 transition-all" style={{ width: `${mediaJob.total ? mediaJob.completed / mediaJob.total * 100 : 0}%` }} /></div></div>}
       <Tabs defaultValue="nodes">
-        <TabsList><TabsTrigger value="nodes"><Server className="mr-1.5 size-3.5" />节点</TabsTrigger><TabsTrigger value="sources"><Globe2 className="mr-1.5 size-3.5" />来源</TabsTrigger><TabsTrigger value="report"><FileImage className="mr-1.5 size-3.5" />报告</TabsTrigger><TabsTrigger value="settings"><Settings2 className="mr-1.5 size-3.5" />设置</TabsTrigger></TabsList>
+        <TabsList><TabsTrigger value="nodes"><Server className="mr-1.5 size-3.5" />节点</TabsTrigger><TabsTrigger value="sources"><Globe2 className="mr-1.5 size-3.5" />来源</TabsTrigger><TabsTrigger value="deep"><Zap className="mr-1.5 size-3.5" />深度测试</TabsTrigger><TabsTrigger value="report"><FileImage className="mr-1.5 size-3.5" />报告</TabsTrigger><TabsTrigger value="settings"><Settings2 className="mr-1.5 size-3.5" />设置</TabsTrigger></TabsList>
         <TabsContent value="nodes">
           <div className="mb-4 flex flex-wrap items-center gap-2">
             {probes.length > 1 && <div className="relative"><select aria-label="探针" className="h-9 min-w-36 appearance-none rounded-md border bg-background pl-3 pr-8 text-sm font-medium outline-none focus:ring-2 focus:ring-ring" value={activeProbe?.id || ''} onChange={e => { chooseProbe(e.target.value); setSelected(new Set()); }}>{probes.map(item => <option key={item.id} value={item.id}>{item.name}{item.type === 'remote' && !item.connected ? '（离线）' : ''}</option>)}</select><ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 size-4 text-muted-foreground" /></div>}
@@ -571,6 +731,7 @@ function App() {
           <NodeTable nodes={filtered} selected={selected} onSelect={select} onDelete={exclude} />
         </TabsContent>
         <TabsContent value="sources"><SourcesView subscriptions={subscriptions} imports={imports} sourceStatus={system.sourceStatus || []} reload={load} notify={notify} /></TabsContent>
+        <TabsContent value="deep"><DeepTestView subscriptions={subscriptions} imports={imports} notify={notify} /></TabsContent>
         <TabsContent value="report"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-base font-semibold">检测报告</h2><p className="mt-1 text-sm text-muted-foreground">当前节点矩阵</p></div><div className="flex gap-2"><Button variant="outline" onClick={() => setReportKey(Date.now())}><RefreshCw />刷新</Button><Button asChild><a href={`/api/reports/latest.png${activeProbe ? `?probe=${encodeURIComponent(activeProbe.id)}` : ''}`} download><Download />下载 PNG</a></Button></div></div><div className="overflow-auto rounded-md border bg-muted/20 p-2"><img key={`${reportKey}-${activeProbe?.id || ''}`} src={`/api/reports/latest.png?t=${reportKey}${activeProbe ? `&probe=${encodeURIComponent(activeProbe.id)}` : ''}`} alt="节点检测报告" className="min-w-[900px] max-w-none" /></div></TabsContent>
         <TabsContent value="settings"><SettingsView config={monitoring} notifications={notifications} onSaved={load} notify={notify} /></TabsContent>
       </Tabs>

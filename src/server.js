@@ -22,6 +22,9 @@ const importsRouter = require('./routes/imports');
 const reportsRouter = require('./routes/reports');
 const authRouter = require('./routes/auth');
 const probesRouter = require('./routes/probes');
+const backendsRouter = require('./routes/backends');
+const deepTestsRouter = require('./routes/deepTests');
+const miaospeedBackends = require('./miaospeed/backends');
 
 const app = express();
 app.disable('x-powered-by');
@@ -79,6 +82,8 @@ app.use('/api/manual-nodes', manualNodesRouter);
 app.use('/api/imports', importsRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/probes', probesRouter);
+app.use('/api/backends', backendsRouter);
+app.use('/api/deep-tests', deepTestsRouter);
 
 // Serve frontend for all other routes
 app.get('*', (req, res) => {
@@ -106,7 +111,7 @@ if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
 }
 
-app.listen(PORT, async () => {
+const httpServer = app.listen(PORT, async () => {
   logger.info(`Node Watcher server started on port ${PORT}`);
   logger.info('🚀 Node Watcher is running!');
   logger.info(`📊 Dashboard: http://localhost:${PORT}`);
@@ -144,6 +149,9 @@ app.listen(PORT, async () => {
     }
   }
 
+  // miaospeed backends: the local engine plus configured forward / reverse backends
+  miaospeedBackends.start();
+
   // Initialize scheduler
   try {
     await schedulerService.init();
@@ -151,6 +159,12 @@ app.listen(PORT, async () => {
   } catch (error) {
     logger.error(`Error initializing scheduler: ${error.message}`);
   }
+});
+
+// Reverse links from miaospeed backends (miaospeed server -connect ws(s)://<host>/miaospeed/reverse/<id>).
+// They authenticate with their own token, not the dashboard session.
+httpServer.on('upgrade', (req, socket, head) => {
+  if (!miaospeedBackends.handleUpgrade(req, socket, head)) socket.destroy();
 });
 
 // Graceful shutdown: stop timers, flush pending history, wait for the Mihomo child to exit.
@@ -163,6 +177,7 @@ async function shutdown(reason, exitCode = 0) {
     schedulerService.stopMonitoring();
     registry.flushAll();
     if (hub) await hub.stop();
+    await miaospeedBackends.stop();
     await mihomoService.shutdown();
   } catch (error) {
     logger.error(`Error during shutdown: ${error.message}`);
