@@ -248,6 +248,159 @@ docker compose ps
 
 如需修改对外端口，将端口映射改为例如 `"8080:3000"`，然后访问 `http://服务器IP:8080`。仅修改 `.env` 中的 `PORT` 不会改变此 Compose 的端口配置。
 
+### 手动部署：本机端口 + 反向代理
+
+适合宿主机上已经有 Caddy / Nginx，或希望由它们统一管理证书的情况。容器只监听 `127.0.0.1` 的一个高位端口，公网只能经反向代理（443）访问面板；内置 HTTPS 和 acme.sh 都不需要。下文以端口 `38080`、域名 `watch.example.com` 为例，可套 Cloudflare 代理（橙色云朵），也可不套。
+
+**1. 创建部署目录和 `.env`**
+
+```bash
+mkdir -p node-watcher/data node-watcher/logs
+cd node-watcher
+sudo chown -R 1000:1000 data logs
+```
+
+```dotenv
+AUTH_USERNAME=admin
+AUTH_PASSWORD=替换为强密码
+AUTH_SESSION_SECRET=替换为 openssl rand -hex 32 的输出
+# 面板经 HTTPS 访问：cookie 只走 HTTPS；信任一层反向代理传来的 X-Forwarded-For / X-Forwarded-Proto
+AUTH_COOKIE_SECURE=true
+TRUST_PROXY=1
+# 反向探针连接的地址（经反向代理的 443 端口）
+MIAOSPEED_PUBLIC_URL=wss://watch.example.com
+```
+
+不要设置 `HTTPS_PORT` 和 `HTTPS_REDIRECT`，TLS 由反向代理负责。
+
+**2. 创建 `docker-compose.yml`**
+
+```yaml
+services:
+  node-watcher:
+    image: ghcr.io/leoch627/node-watcher:latest
+    container_name: node-watcher
+    ports:
+      - "127.0.0.1:38080:3000"   # 只绑定本机回环地址，公网无法直连
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      AUTH_USERNAME: ${AUTH_USERNAME:-admin}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:?Set AUTH_PASSWORD in .env}
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:-}
+      AUTH_SESSION_TTL_HOURS: ${AUTH_SESSION_TTL_HOURS:-24}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-true}
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      MIAOSPEED_PUBLIC_URL: ${MIAOSPEED_PUBLIC_URL:?Set MIAOSPEED_PUBLIC_URL in .env}
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+```
+
+端口映射必须写成 `127.0.0.1:38080:3000`。只写 `38080:3000` 会监听所有网卡，而且 Docker 发布的端口会绕过 ufw 等宿主机防火墙。国内服务器拉取慢时，把镜像换成 `ghcr.1ms.run/leoch627/node-watcher:latest`。
+
+**3. 拉取并启动，确认本机可访问**
+
+```bash
+docker compose pull
+docker compose up -d
+curl -s http://127.0.0.1:38080/api/health
+```
+
+返回 `"success":true` 即正常。
+
+**4. 配置反向代理（二选一）**
+
+反向探针通过 `/miaospeed/reverse/` 建立 WebSocket 长连接，反向代理必须转发升级请求，并且不能因为连接空闲而断开它。
+
+*Caddy（推荐）*：自动申请证书，自动处理 WebSocket，没有空闲超时。`/etc/caddy/Caddyfile`：
+
+```caddyfile
+watch.example.com {
+    reverse_proxy 127.0.0.1:38080
+}
+```
+
+```bash
+sudo systemctl reload caddy
+```
+
+*Nginx*：证书可用 certbot 申请，或使用下文的 Cloudflare Origin 证书。`/etc/nginx/conf.d/node-watcher.conf`：
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 80;
+    server_name watch.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;                       # Nginx 1.25.1 以下改为 listen 443 ssl http2; 并删除此行
+    server_name watch.example.com;
+
+    ssl_certificate     /etc/nginx/ssl/watch.example.com.pem;
+    ssl_certificate_key /etc/nginx/ssl/watch.example.com.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:38080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # WebSocket：反向探针连接
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        # 默认 60 秒无数据就断开，反向探针会反复掉线
+        proxy_read_timeout 1d;
+        proxy_send_timeout 1d;
+    }
+}
+```
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+`X-Forwarded-Proto` 不能省：面板据此判断请求是否为 HTTPS，决定安全 cookie 和给反向探针生成的 `wss://` 地址。
+
+**5. 套 Cloudflare 代理时的额外设置**
+
+不使用 Cloudflare 代理（DNS 记录为灰色云朵）时跳过本步。
+
+- **SSL/TLS 模式选 Full (strict)**，不要选 Flexible。源站证书可以继续用 Let's Encrypt，也可以在 Cloudflare 的 SSL/TLS → Origin Server 中创建 Origin 证书（最长 15 年）。Caddy 使用 Origin 证书时，在站点块中加 `tls /etc/caddy/origin.pem /etc/caddy/origin.key`，否则 Caddy 会自己申请证书。miaospeed 看到的是 Cloudflare 的公网证书，满足它只信任公共证书的要求。
+- **传递真实客户端 IP。** 此时请求经过两层代理（Cloudflare 和本机反向代理），而 `TRUST_PROXY=1` 只信任一层。面板会把 Cloudflare 节点的 IP 当成访客 IP，登录失败次数按它计数，别人在同一节点试错密码会连带锁住你。请让反向代理改用 Cloudflare 提供的真实 IP：
+  - Caddy：`reverse_proxy 127.0.0.1:38080 { header_up X-Forwarded-For {http.request.header.CF-Connecting-IP} }`
+  - Nginx：把 `X-Forwarded-For` 一行改为 `proxy_set_header X-Forwarded-For $http_cf_connecting_ip;`
+- **源站 443 只放行 Cloudflare IP 段**，否则上述请求头可被直连源站的人伪造：
+
+  ```bash
+  for ip in $(curl -fsS https://www.cloudflare.com/ips-v4) $(curl -fsS https://www.cloudflare.com/ips-v6); do
+    sudo ufw allow proto tcp from "$ip" to any port 443
+  done
+  ```
+
+  然后删除对所有来源放行 443 的规则（如有）。使用 Origin 证书时也不需要对外开放 80。云服务器的安全组同样可以实现这一限制。
+- **关闭 Rocket Loader 和 Email Address Obfuscation**（Speed → Optimization、Scrape Shield）。它们会向页面注入脚本，被面板的 CSP 拦截，导致页面空白。
+- **不要拦截反向探针**：Bot Fight Mode、Under Attack 模式和托管质询会拦下 miaospeed 的 WebSocket 连接。开启这些功能时，请在 Security → WAF 中为路径 `/miaospeed/reverse/` 添加跳过规则。WebSockets 开关（Network）保持开启。
+- 国内的反向探针经 Cloudflare 连接主控，高峰期可能偶尔断线重连；对这类探针，可以改用正向后端（主控主动连接探针，不经过 Cloudflare）。
+
+**6. 验证**
+
+```bash
+curl -s https://watch.example.com/api/health
+```
+
+浏览器访问 `https://watch.example.com` 登录后，在「设置 → miaospeed 后端」添加反向后端，给出的连接地址应以 `wss://watch.example.com/miaospeed/reverse/` 开头。
+
 ### 从源码构建（可选）
 
 准备好 Git、Docker 和 Docker Compose。仓库的 Docker 构建支持 `linux/amd64` 和 `linux/arm64`，镜像内已包含 miaospeed，无需在宿主机另行安装。
@@ -440,15 +593,7 @@ miaospeed 连上后，面板中该后端显示「在线」，几秒后自动巡�
 - `HTTPS_REDIRECT=true` 时，只要 HTTPS 监听在运行，普通 HTTP 请求就跳转到 HTTPS，但 ACME 验证、`/api/health`、`/api/ready` 和反向探针连接除外；对外 HTTPS 端口不是 443 时用 `HTTPS_PUBLIC_PORT` 指定跳转端口。
 - 同时设置 `AUTH_COOKIE_SECURE=true` 和 `MIAOSPEED_PUBLIC_URL=wss://你的域名`。仓库的 `docker-compose.yml` 中有注释掉的示例（`80:3000`、`443:3443`）。`/api/health` 的 `https` 字段显示 HTTPS 是否已启动、证书域名与到期时间及错误原因。
 
-**3. 使用自己的反向代理。** 面板（3000）放在 HTTPS 反向代理之后，设置 `AUTH_COOKIE_SECURE=true`、`TRUST_PROXY=1` 和 `MIAOSPEED_PUBLIC_URL=wss://你的域名`；不要把 3000 端口直接暴露到公网。反向代理需要转发 WebSocket 升级请求（`/miaospeed/reverse/`）。最简单的 Caddy 配置（自动申请证书并支持 WebSocket）：
-
-```caddyfile
-watch.example.com {
-    reverse_proxy 127.0.0.1:3000
-}
-```
-
-Nginx 需要为该路径加上 `proxy_http_version 1.1`、`proxy_set_header Upgrade $http_upgrade` 和 `proxy_set_header Connection "upgrade"`。
+**3. 使用自己的反向代理。** 面板放在 HTTPS 反向代理之后，只绑定本机端口，设置 `AUTH_COOKIE_SECURE=true`、`TRUST_PROXY=1` 和 `MIAOSPEED_PUBLIC_URL=wss://你的域名`。反向代理需要转发 WebSocket 升级请求（`/miaospeed/reverse/`）且不能空闲超时。完整步骤（Docker Compose、Caddy / Nginx 配置、套 Cloudflare 代理）见「手动部署：本机端口 + 反向代理」。
 
 其他建议：
 
