@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity, Bell, Cable, Check, ChevronDown, Copy, Download, FileImage, Gauge, Globe2, Import, KeyRound,
-  LoaderCircle, LockKeyhole, LogIn, LogOut, Mail, Network, Play, Plus, Radar, RefreshCw, Search,
+  LoaderCircle, LockKeyhole, LockOpen, LogIn, LogOut, Mail, Network, Play, Plus, Radar, RefreshCw, Search,
   Send, Server, Settings2, Smartphone, Square, Timer, Trash2, X, Zap
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -37,7 +37,7 @@ function formatTime(value) {
 }
 
 function Metric({ label, value, detail, tone }) {
-  return <div className="min-w-0 flex-1 px-5 py-4 first:pl-0 last:pr-0">
+  return <div className="min-w-0 px-4 py-3 sm:flex-1 sm:px-5 sm:py-4 sm:first:pl-0 sm:last:pr-0">
     <div className="text-xs font-medium text-muted-foreground">{label}</div>
     <div className={`mt-1 text-2xl font-semibold tabular-nums ${tone || ''}`}>{value}</div>
     <div className="mt-0.5 truncate text-xs text-muted-foreground">{detail}</div>
@@ -139,7 +139,8 @@ function ConnectDetails({ info, notify }) {
   return <div className="grid gap-4">
     <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">token 只显示这一次。每台机器运行一个 miaospeed，主动连接主控，自身不需要开放端口；丢失 token 后可重置。</div>
     {!info.secure && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">当前地址是不加密的 ws://，测试任务里包含节点密码，只建议在局域网使用。公网请让主控通过 HTTPS 访问（域名 + Let's Encrypt 证书），或设置 MIAOSPEED_PUBLIC_URL=wss://你的域名。</div>}
-    <CopyField label="一键部署（推荐，自动安装 Docker；需要 root）" value={info.script} notify={notify} />
+    <CopyField label="一键部署 · Docker（推荐，自动安装 Docker；需要 root）" value={info.script} notify={notify} />
+    <CopyField label="一键部署 · 二进制（systemd 服务，不装 Docker，适合树莓派 / 小内存机器；需要 root）" value={info.scriptBinary} notify={notify} />
     <CopyField label="Docker（支持 amd64 / arm64 / 树莓派 armv7）" value={info.docker} notify={notify} />
     <CopyField label="Linux / macOS 二进制" value={info.binary} notify={notify} />
     <CopyField label="Windows" value={info.windows} notify={notify} />
@@ -201,7 +202,13 @@ function BackendsSection({ notify }) {
   </section>;
 }
 
-const presetIcons = { latency: Timer, speed: Gauge, topology: Network };
+const presetIcons = { latency: Timer, speed: Gauge, topology: Network, unlock: LockOpen };
+const presetHints = {
+  latency: '延迟RTT / HTTP延迟 / UDP NAT 类型',
+  speed: '下载测速 + 延迟 + UDP 类型',
+  topology: '入口与出口的地区、ASN、组织，按落地 IP 聚类',
+  unlock: '「设置 → 解锁检测」中选择的服务 + 出口地区，FullTClash 风格连通性报告'
+};
 const statusLabels = { running: '进行中', completed: '完成', failed: '失败', cancelled: '已取消' };
 const statusVariants = { running: 'outline', completed: 'success', failed: 'danger', cancelled: 'warning' };
 
@@ -217,6 +224,11 @@ function DeepTestView({ subscriptions, imports, notify }) {
   const [sort, setSort] = useState('');
   const [busy, setBusy] = useState(false);
   const running = data.current?.status === 'running';
+  useEffect(() => {
+    if (!running) return;
+    setPreset(data.current.preset);
+    setBackendId(data.current.backend.id);
+  }, [running, data.current?.id]);
   const load = async () => { try { setData(await api('/api/deep-tests')); } catch (error) { notify(error.message, true); } };
   useEffect(() => { load(); }, []);
   useEffect(() => { const timer = setInterval(load, running ? 1500 : 10000); return () => clearInterval(timer); }, [running]);
@@ -241,7 +253,7 @@ function DeepTestView({ subscriptions, imports, notify }) {
     <section className="grid gap-4 rounded-md border p-4">
       <div className="flex flex-wrap items-center gap-2">
         {Object.entries(data.presets).map(([key, label]) => { const Icon = presetIcons[key] || Zap; return <Button key={key} variant={preset === key ? 'default' : 'outline'} onClick={() => setPreset(key)} disabled={running}><Icon />{label}</Button>; })}
-        <span className="ml-auto text-xs text-muted-foreground">{preset === 'latency' ? '延迟RTT / HTTP延迟 / UDP NAT 类型' : preset === 'speed' ? '下载测速 + 延迟 + UDP 类型' : '入口与出口的地区、ASN、组织，按落地 IP 聚类'}</span>
+        <span className="ml-auto text-xs text-muted-foreground">{presetHints[preset] || ''}</span>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">后端<Select value={backend?.id || ''} onChange={setBackendId} disabled={running}>{backends.length === 0 && <option value="">没有可用后端</option>}{backends.map(item => <option key={item.id} value={item.id}>{item.name}{[item.type !== 'local' && backendTypeLabels[item.type], !item.online && '离线'].filter(Boolean).map(text => `（${text}）`).join('')}</option>)}</Select></label>
@@ -368,11 +380,11 @@ function NodeTable({ nodes, columns, selected, onSelect, onDelete }) {
         <tr>
           <th className="w-10 px-3 py-2.5"></th>
           <th className="min-w-56 px-3 py-2.5 font-medium">节点</th>
+          <th className="w-24 px-3 py-2.5 font-medium">状态</th>
+          <th className="w-24 px-3 py-2.5 font-medium">延迟</th>
           <th className="w-40 px-3 py-2.5 font-medium">来源</th>
           <th className="w-24 px-3 py-2.5 font-medium">协议</th>
           <th className="w-28 px-3 py-2.5 font-medium">地区</th>
-          <th className="w-24 px-3 py-2.5 font-medium">状态</th>
-          <th className="w-24 px-3 py-2.5 font-medium">延迟</th>
           {multiProbe && <th className="w-28 px-3 py-2.5 font-medium"><Tooltip content={`圆点依次为：${(nodes.find(item => item.probes?.length)?.probes || []).map(probe => probe.name).join('、')}`}><span className="cursor-help underline decoration-dotted underline-offset-4">各探针</span></Tooltip></th>}
           {columns.map(column => <th key={column.id} className="w-28 px-3 py-2.5 text-center font-medium">{column.label}</th>)}
           <th className="min-w-48 px-3 py-2.5 font-medium">区域服务</th>
@@ -387,11 +399,11 @@ function NodeTable({ nodes, columns, selected, onSelect, onDelete }) {
             <div className="truncate font-medium" title={status.node.name}>{status.node.name}</div>
             <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{status.node.server}:{status.node.port}</div>
           </td>
+          <td className="whitespace-nowrap px-3 py-2.5"><NodeState online={status.online} /></td>
+          <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs tabular-nums">{status.online ? <Tooltip content="HTTP 延迟（含建连）/ 延迟 RTT"><span>{status.responseTime} ms{status.rtt ? <span className="ml-1 text-muted-foreground">/ {status.rtt}</span> : null}</span></Tooltip> : '-'}</td>
           <td className="max-w-40 truncate px-3 py-2.5 text-muted-foreground" title={status.node.subscription}>{status.node.subscription}</td>
           <td className="px-3 py-2.5"><Badge variant="outline">{String(status.node.protocol).toUpperCase()}</Badge></td>
           <td className="px-3 py-2.5"><RegionCell node={status.node} media={status.media} /></td>
-          <td className="whitespace-nowrap px-3 py-2.5"><NodeState online={status.online} /></td>
-          <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs tabular-nums">{status.online ? <Tooltip content="HTTP 延迟（含建连）/ 延迟 RTT"><span>{status.responseTime} ms{status.rtt ? <span className="ml-1 text-muted-foreground">/ {status.rtt}</span> : null}</span></Tooltip> : '-'}</td>
           {multiProbe && <td className="px-3 py-2.5"><ProbeDots probes={status.probes} /></td>}
           {columns.map(column => <td key={column.id} className="px-3 py-2.5 text-center"><ServiceState value={status.media?.services?.[column.id]} /></td>)}
           <td className="px-3 py-2.5"><RegionalServices services={status.media?.services} /></td>
@@ -573,6 +585,7 @@ function SettingsView({ config, notifications, onSaved, notify }) {
         </div>
       </div>
     </section>
+
   </div>;
 }
 
@@ -682,7 +695,7 @@ function App() {
     </div></header>
     <main className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6">
       {message && <div className={`fixed right-4 top-20 z-50 flex max-w-sm items-center gap-2 rounded-md border px-4 py-3 text-sm shadow-lg ${message.error ? 'border-red-200 bg-red-50 text-red-800' : 'bg-background'}`}>{message.error ? <X className="size-4" /> : <Check className="size-4 text-emerald-600" />}{message.text}</div>}
-      <section className="mb-6 flex divide-x border-b">
+      <section className="mb-6 grid grid-cols-2 border-b sm:flex sm:divide-x [&>*:nth-child(odd)]:border-r sm:[&>*:nth-child(odd)]:border-r-0">
         <Metric label="全部节点" value={summary.total} detail={`${sources.length} 个来源`} />
         <Metric label="在线" value={summary.online} detail={summary.total ? `${Math.round(summary.online / summary.total * 100)}% 可用` : '-'} tone="text-emerald-700" />
         <Metric label="离线" value={summary.offline} detail={summary.pending ? `${summary.pending} 个待检测` : '最近一轮检测'} tone={summary.offline ? 'text-red-700' : ''} />

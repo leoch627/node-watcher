@@ -86,7 +86,6 @@ class ConfigManager {
         failureThreshold: parseInt(process.env.FAILURE_THRESHOLD, 10) || 2,
         // How often subscriptions are re-downloaded (independent of the probe interval).
         subscriptionRefreshMinutes: parseInt(process.env.SUBSCRIPTION_REFRESH_MINUTES, 10) || 30,
-        concurrency: parseInt(process.env.CHECK_CONCURRENCY, 10) || 8,
         customHealthCheckUrl: process.env.CUSTOM_HEALTH_CHECK_URL || ''
       },
       subscriptions: [],

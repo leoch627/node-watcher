@@ -3,6 +3,8 @@
 //    speed sparkline and the UDP NAT type;
 //  - topology: entry analysis (grouped by entry IP) and exit analysis (nodes clustered by exit IP).
 const svg = require('./render/svg');
+const scripts = require('../miaospeed/scripts');
+const reportService = require('./report');
 const {
   ROW, FONT, BORDER, MUTED, INK, FAILED_FILL, SPEED_SCALE, pick, protocolLabel, cell, nameCell, latencyCell,
   header, verticals, rowLine, title, footer, nameWidth, toPng, formatTime
@@ -248,8 +250,37 @@ async function renderTopology(job, { appVersion = '' } = {}) {
   return toPng(svg.document(width, height, body), width, height);
 }
 
-function render(job, options = {}) {
-  return job.preset === 'topology' ? renderTopology(job, options) : renderSpeed(job, options);
+// Unlock tests reuse the node-matrix renderer (FullTClash "连通性测试" layout): HTTP delay, one
+// column per script coloured by the script itself, and a "解锁占比" row.
+async function renderUnlock(job, { appVersion = '', sort = null } = {}) {
+  const rows = sortRows(job.nodes.map((node, index) => ({ node, index, result: job.results[node.id] })), sort);
+  const statuses = rows.map(({ node, result }) => ({
+    node: { name: node.name, protocol: node.protocol, region: node.region },
+    online: null, responseTime: result ? result.http ?? 0 : null, rtt: result ? result.rtt ?? 0 : null,
+    media: result ? {
+      exit: { region: result.outbound?.main?.countryCode || null },
+      services: Object.fromEntries(Object.entries(result.scripts || {}).map(([id, value]) => [id, {
+        ...scripts.classify(value), background: value.background || '', label: scripts.meta(id)?.name || id
+      }]))
+    } : null
+  }));
+  const seconds = Math.round((job.durationMs || 0) / 1000);
+  const backend = `${job.backend.name}${job.version ? `(${job.version})` : ''}`;
+  const status = job.status === 'completed' ? '' : ` [${job.status === 'cancelled' ? '已取消' : job.status === 'running' ? '进行中' : '未完成'} ${job.completed}/${job.total}]`;
+  return reportService.render(statuses, {
+    columns: job.options.scripts || [], ratioRow: true, appVersion,
+    title: `Node Watcher - 连通性测试 | ${job.backend.name}`,
+    footerLines: [
+      `版本=${appVersion}  后端=${backend}  排序=${SORT_LABEL[sort] || '订阅原序'}  过滤器=${filterLabel(job.filter)}`,
+      `测试时间=${formatTime(job.startedAt)}  总共耗时=${seconds}s  测试结果仅供参考，以实际情况为准${status}`
+    ]
+  });
 }
 
-module.exports = { render, renderSpeed, renderTopology, buildTopology, formatSpeed, maskIp };
+function render(job, options = {}) {
+  if (job.preset === 'topology') return renderTopology(job, options);
+  if (job.preset === 'unlock') return renderUnlock(job, options);
+  return renderSpeed(job, options);
+}
+
+module.exports = { render, renderSpeed, renderTopology, renderUnlock, buildTopology, formatSpeed, maskIp };

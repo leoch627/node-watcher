@@ -20,6 +20,8 @@ services:
       NODE_ENV: production
       PORT: 3000
       AUTH_USERNAME: ${AUTH_USERNAME:-admin}
+      # false: write logs only to logs/ (not to `docker logs`)
+      LOG_CONSOLE: ${LOG_CONSOLE:-true}
       AUTH_PASSWORD: ${AUTH_PASSWORD:?Set AUTH_PASSWORD in .env}
       AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:-}
       AUTH_SESSION_TTL_HOURS: ${AUTH_SESSION_TTL_HOURS:-24}

@@ -63,7 +63,7 @@ class NotificationService {
   }
 
   // Sent instead of per-node alerts when (almost) every node fails at once: that points at the
-  // monitoring host's own network or at Mihomo, not at the nodes.
+  // probe's own network or its miaospeed, not at the nodes.
   async sendIncidentNotification({ failing, total }, resolved = false, probeName = null) {
     return this.dispatchAlert(this.getIncidentAlert({ failing, total }, resolved, probeName), 'incident');
   }
@@ -113,7 +113,7 @@ class NotificationService {
     const title = `${resolved ? '检测已恢复正常' : '大量节点同时检测失败'}${probeName ? ` @ ${probeName}` : ''}`;
     const message = resolved
       ? `${where}的失败节点已降至 ${failing}/${total}，逐节点告警恢复。`
-      : `${where}上 ${failing}/${total} 个节点同时检测失败，更可能是${where}${probeName ? ' 的' : ''}网络或 Mihomo 异常而非节点本身故障，已暂停该处的逐节点告警。`;
+      : `${where}上 ${failing}/${total} 个节点同时检测失败，更可能是${where}${probeName ? ' 的' : ''}网络或 miaospeed 异常而非节点本身故障，已暂停该处的逐节点告警。`;
     return { online: resolved, title, subject: `[Node Watcher] ${title}`, message };
   }
 

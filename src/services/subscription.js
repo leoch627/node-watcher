@@ -10,7 +10,8 @@ class SubscriptionService {
     this.httpsAgent = new https.Agent({ keepAlive: true });
   }
 
-  async fetchSubscription(url) {
+  // Raw response of the first user agent that works (headers included).
+  async fetchResponse(url) {
     let parsed;
     try {
       parsed = new URL(url);
@@ -32,12 +33,22 @@ class SubscriptionService {
           ...options,
           headers: { 'User-Agent': userAgent, Accept: 'text/plain, text/yaml, application/yaml, application/x-yaml' }
         });
-        return String(response.data || '');
+        return response;
       } catch (error) {
         firstError ||= error;
       }
     }
     throw firstError;
+  }
+
+  async fetchSubscription(url) {
+    return String((await this.fetchResponse(url)).data || '');
+  }
+
+  // Content plus the traffic info airports send in `subscription-userinfo`.
+  async fetchWithInfo(url) {
+    const response = await this.fetchResponse(url);
+    return { content: String(response.data || ''), userinfo: parseUserinfo(response.headers?.['subscription-userinfo']) };
   }
 
   async getNodes(subscriptionUrl) {
@@ -55,4 +66,23 @@ class SubscriptionService {
   }
 }
 
+// "upload=1; download=2; total=3; expire=1700000000" -> { upload, download, total, expire } (bytes,
+// unix seconds; expire null when missing or 0).
+function parseUserinfo(header) {
+  if (!header) return null;
+  const values = {};
+  for (const part of String(header).split(';')) {
+    const [key, raw] = part.split('=').map(item => item && item.trim());
+    if (!key || raw === undefined) continue;
+    const number = Number(raw);
+    if (Number.isFinite(number) && number >= 0) values[key.toLowerCase()] = number;
+  }
+  if (!['upload', 'download', 'total'].some(key => key in values)) return null;
+  return {
+    upload: values.upload || 0, download: values.download || 0, total: values.total || 0,
+    expire: values.expire > 0 ? values.expire : null
+  };
+}
+
 module.exports = new SubscriptionService();
+module.exports.parseUserinfo = parseUserinfo;

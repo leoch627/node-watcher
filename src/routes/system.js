@@ -45,11 +45,11 @@ router.get('/config', (req, res) => {
 // Update monitoring settings. Every provided field is validated first; nothing is applied unless all are valid.
 const INTEGER_FIELDS = [
   ['checkIntervalMinutes', 1, 1440, 'Check interval'],
-  ['timeoutSeconds', 1, 120, 'Timeout'],
+  // miaospeed accepts per-request timeouts up to 10 s.
+  ['timeoutSeconds', 1, 10, 'Timeout'],
   ['retryAttempts', 0, 3, 'Retry attempts'],
   ['failureThreshold', 1, 10, 'Failure threshold'],
-  ['subscriptionRefreshMinutes', 1, 1440, 'Subscription refresh interval'],
-  ['concurrency', 1, 32, 'Concurrency']
+  ['subscriptionRefreshMinutes', 1, 1440, 'Subscription refresh interval']
 ];
 
 router.put('/monitoring', (req, res) => {

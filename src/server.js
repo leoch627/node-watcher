@@ -9,6 +9,7 @@ const schedulerService = require('./services/scheduler');
 const authService = require('./services/auth');
 const registry = require('./services/probes');
 const { version } = require('../package.json');
+const { cleanupLegacy } = require('./utils/legacy');
 
 // Import routes
 const subscriptionsRouter = require('./routes/subscriptions');
@@ -127,6 +128,12 @@ const httpServer = app.listen(PORT, async () => {
   logger.info(`📊 Dashboard: http://localhost:${PORT}`);
   logger.info(`🔌 API: http://localhost:${PORT}/api`);
   logger.info(`📈 Public Stats: http://localhost:${PORT}/api/nodes/public`);
+
+  try {
+    cleanupLegacy({ store: config, dataDir: path.dirname(require('./services/monitor').historyPath) });
+  } catch (error) {
+    logger.warn(`Could not clean up files of earlier versions: ${error.message}`);
+  }
 
   // miaospeed backends: the local engine plus configured forward / reverse backends. The first
   // health check runs right after, so wait for the local engine to come up.

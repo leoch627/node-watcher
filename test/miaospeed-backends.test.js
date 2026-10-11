@@ -137,3 +137,19 @@ test('task nodes carry the node id as proxy name', () => {
   assert.equal(node.name, 'abc');
   assert.match(node.payload, /^name: abc$/m);
 });
+
+test('deploy commands are shell-safe even with a hostile Host header', () => {
+  const { connectInfo } = require('../src/routes/backends');
+  const req = host => ({ protocol: 'https', get: () => host });
+  const record = { id: 'm-1', token: 'tok_en-1' };
+  const ok = connectInfo(req('monitor.example.com'), record);
+  assert.equal(ok.url, 'wss://monitor.example.com/miaospeed/reverse/m-1');
+  assert.match(ok.scriptBinary, /probe --mode binary --connect 'wss:\/\/monitor\.example\.com\/miaospeed\/reverse\/m-1' --token 'tok_en-1'$/);
+  for (const host of ["a.example.com';reboot;'", 'a.example.com$(id)', 'a b', '']) {
+    const info = connectInfo(req(host), record);
+    for (const command of [info.script, info.scriptBinary, info.docker, info.binary]) {
+      assert.ok(!/reboot|\$\(|';/.test(command.replace(/'[^']*'/g, '')), command);
+    }
+    assert.equal(info.url, 'ws://localhost/miaospeed/reverse/m-1');
+  }
+});

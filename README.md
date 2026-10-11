@@ -16,7 +16,7 @@ Node Watcher 是 [miaospeed](https://github.com/AirportR/miaospeed) 的控制面
 | 状态告警 | 节点离线 / 恢复、探针断开 / 恢复，支持 Bark、SMTP 邮件和 Telegram Bot，可分别启用和测试 |
 | 检测报告 | 将当前节点状态和解锁结果生成 PNG 矩阵，可预览、下载 |
 | 多地探针 | miaospeed 后端：主控自带的本机 miaospeed、正向（连接已有的 miaospeed，例如给 Koipy 用的后端）和反向（NAT 后的机器主动连回主控，无需开放端口），同一份订阅从多个网络检测并对比 |
-| 深度测试 | 延迟 RTT / HTTP 延迟、UDP NAT 类型、下载测速和入口 / 出口拓扑分析，生成 Koipy / FullTClash 风格的 PNG 报告 |
+| 深度测试 | 延迟 RTT / HTTP 延迟、UDP NAT 类型、下载测速、入口 / 出口拓扑分析和解锁测试，生成 Koipy / FullTClash 风格的 PNG 报告 |
 | 内置 HTTPS | 一键脚本可绑定域名，自动申请并续期 Let's Encrypt 证书（HTTP 验证或 DNS API 验证） |
 | 登录保护 | 管理员登录、签名会话 Cookie、登录失败限速 |
 
@@ -375,13 +375,19 @@ docker compose ps
 
 **第 2 步：添加后端。** 面板「设置 → miaospeed 后端」点「添加反向后端」，输入名称（如「上海电信」）。弹窗给出连接地址、token（**只显示这一次**）和几种部署命令。
 
-**第 3 步：在探针机器上运行其中一条命令。** 一键脚本（Linux，root；自动安装 Docker，支持 amd64 / arm64 / armv7，包括 32 位 Raspberry Pi OS）：
+**第 3 步：在探针机器上运行其中一条命令。** 一键脚本（Linux，root）有两种部署方式：
+
+- **Docker（默认）**：自动安装 Docker，运行官方镜像 `airportr/miaospeed:4.7.8`（amd64 / arm64 / armv7，包括 32 位 Raspberry Pi OS）。
+- **二进制（`--mode binary`）**：不装 Docker，下载对应架构的 miaospeed 官方发布版（校验 SHA-256）并注册为 systemd 服务（Alpine 为 OpenRC），开机自启；进程崩溃后 5 秒自动拉起，5 分钟内连续失败 5 次就停止拉起，留给你手动检查（`systemctl status miaospeed`、`journalctl -u miaospeed -n 50`，处理后 `systemctl reset-failed miaospeed && systemctl start miaospeed`）。主控暂时离线不算失败：miaospeed 会自己重连。
 
 ```bash
+# Docker
 wget -N https://ghfast.top/https://raw.githubusercontent.com/leoch627/node-watcher/main/node-watcher.sh && bash node-watcher.sh probe --connect 'wss://nw.example.com/miaospeed/reverse/<ID>' --token '<token>'
+# 二进制 + systemd
+wget -N https://ghfast.top/https://raw.githubusercontent.com/leoch627/node-watcher/main/node-watcher.sh && bash node-watcher.sh probe --mode binary --connect 'wss://nw.example.com/miaospeed/reverse/<ID>' --token '<token>'
 ```
 
-也可以运行 `bash node-watcher.sh` 后在菜单中选「部署探针」，按提示粘贴地址和 token。脚本运行官方镜像 `airportr/miaospeed:4.7.8`。已有 Docker 时也可以直接：
+也可以运行 `bash node-watcher.sh` 后在菜单中选「部署探针」，按提示选择部署方式并粘贴地址和 token。已有 Docker 时也可以直接：
 
 ```bash
 docker run -d --name miaospeed --restart unless-stopped airportr/miaospeed:4.7.8 \
@@ -408,13 +414,14 @@ miaospeed 连上后，面板中该后端显示「在线」，几秒后自动巡�
 
 ## 深度测试
 
-「深度测试」标签页在 miaospeed 后端上运行三类测试，结果可预览、按延迟或速度排序、下载 PNG，最近 30 次保存在 `data/deep-tests/`：
+「深度测试」标签页在 miaospeed 后端上运行四类测试，结果可预览、按延迟或速度排序、下载 PNG，最近 30 次保存在 `data/deep-tests/`：
 
 | 测试 | 内容 |
 | --- | --- |
 | 延迟测试 | 延迟 RTT（TLS 握手后首包往返）、HTTP 延迟（含建连）、UDP NAT 类型（RFC 5780 STUN） |
 | 测速 | 在延迟测试基础上逐节点下载测速：平均 / 最大速度与每秒速度曲线；时长、线程和测速文件可选 |
 | 拓扑分析 | 入口与出口 IP 的地区、ASN 和组织，入口按 IP 归组，出口按落地 IP 聚类（「簇」表示落地复用） |
+| 解锁测试 | 「设置 → 解锁检测」中选择的服务（API 可用 `options.scripts` 另选，最多 30 个）加出口地区，生成 FullTClash「连通性测试」风格的矩阵，末行为各服务的解锁占比 |
 
 > 测速会消耗大量流量：每个节点约为「时长 × 带宽」，千兆节点测 5 秒约 600 MB。请手动运行，不要频繁测速；在按流量计费的探针机器上尤其注意。
 
@@ -615,7 +622,7 @@ src/services/probes.js   探针注册表：每个 miaospeed 后端独立的节�
 src/services/render/     PNG 报告的 SVG 表格绘制
 src/miaospeed/           miaospeed 协议与签名、本机进程、正向 / 反向后端、任务执行、解锁脚本目录
 src/assets/              Twemoji 国旗图形、随附的 miaospeed-scripts
-src/utils/               配置和日志工具
+src/utils/               配置、日志、内置 HTTPS、旧版残留清理
 scripts/                 setup-binaries.js（npm run setup:bin）
 test/                    自动化测试
 public/                  前端构建产物
@@ -660,7 +667,7 @@ docker buildx build \
 | `POST` | `/api/backends/:id/check` | 立即检查正向后端能否连接 |
 | `PATCH` / `DELETE` | `/api/backends/:id` | 改名、启用 / 停用、修改正向地址；删除后端及其历史 |
 | `GET` | `/api/deep-tests` | 当前任务、测试记录与可用后端 |
-| `POST` | `/api/deep-tests` | 开始测试：`{"preset":"latency\|speed\|topology","backendId":"…","sourceId":"…","include":"正则","exclude":"正则","options":{"downloadDuration":5,"downloadThreading":1}}` |
+| `POST` | `/api/deep-tests` | 开始测试：`{"preset":"latency\|speed\|topology\|unlock","backendId":"…","sourceId":"…","include":"正则","exclude":"正则","options":{"downloadDuration":5,"downloadThreading":1}}`；解锁测试可传 `"options":{"scripts":["netflix","chatgpt"]}` |
 | `GET` / `DELETE` | `/api/deep-tests/:id` | 测试详情；删除测试记录 |
 | `GET` | `/api/deep-tests/:id/report.png` | 测试报告 PNG；`?sort=rtt\|http\|speed` 排序，`&download=1` 下载 |
 | `POST` | `/api/deep-tests/:id/cancel` | 停止正在运行的测试 |
@@ -718,7 +725,7 @@ docker buildx imagetools inspect ghcr.io/leoch627/node-watcher:latest
 
 **从旧版本升级后，原来的探针不再工作？**
 
-探针现在就是 miaospeed 后端，旧版的 Node Watcher 探针容器不再受支持。在主控「设置 → miaospeed 后端」添加反向后端，按「部署反向探针」在探针机器上部署 miaospeed，然后删除旧的探针容器。主控本机的在线率历史（`data/history.json`）会保留。
+探针现在就是 miaospeed 后端，旧版的 Node Watcher 探针容器不再受支持。在主控「设置 → miaospeed 后端」添加反向后端，按「部署反向探针」在探针机器上部署 miaospeed（一键脚本会自动移除旧的探针容器）。主控本机的在线率历史（`data/history.json`）会保留；新版首次启动时自动清理旧探针留下的配置记录、各探针历史文件（`data/history-p-*.json`）、旧探针证书（`data/probe-tls/`）和 mihomo 工作目录（`data/mihomo/`），日志中会列出清理了哪些内容。
 
 **GitHub Actions 推送镜像时报 `denied: permission_denied: write_package`？**
 

@@ -3,30 +3,44 @@ const backends = require('../miaospeed/backends');
 const registry = require('../services/probes');
 
 const router = express.Router();
-const MIAOSPEED_IMAGE = process.env.MIAOSPEED_IMAGE || 'airportr/miaospeed:4.7.8';
+const SAFE_IMAGE = /^[A-Za-z0-9._\/:@-]+$/;
+const MIAOSPEED_IMAGE = SAFE_IMAGE.test(process.env.MIAOSPEED_IMAGE || '') ? process.env.MIAOSPEED_IMAGE : 'airportr/miaospeed:4.7.8';
 // One-click installer (same mirror as the README's master install command).
 const SCRIPT_URL = process.env.PROBE_SCRIPT_URL
   || 'https://ghfast.top/https://raw.githubusercontent.com/leoch627/node-watcher/main/node-watcher.sh';
 
+// POSIX single-quoting: the commands below are pasted into a root shell.
+const sq = value => `'${String(value).replace(/'/g, "'\\''")}'`;
+
 // Base URL miaospeed backends dial for reverse links. Behind an HTTPS reverse proxy this is
-// wss://<domain>; MIAOSPEED_PUBLIC_URL overrides what the request suggests.
+// wss://<domain>; MIAOSPEED_PUBLIC_URL overrides what the request suggests. The Host header is
+// client-controlled, so it is parsed and only a plain host[:port] is accepted.
 function reverseBase(req) {
   const configured = String(process.env.MIAOSPEED_PUBLIC_URL || '').trim().replace(/\/+$/, '');
-  if (configured) return configured.replace(/^http/, 'ws');
-  return `${req.protocol === 'https' ? 'wss' : 'ws'}://${req.get('host')}`;
+  const candidate = configured ? configured.replace(/^http/, 'ws') : `${req.protocol === 'https' ? 'wss' : 'ws'}://${req.get('host') || ''}`;
+  try {
+    const url = new URL(candidate);
+    if (['ws:', 'wss:'].includes(url.protocol) && /^[A-Za-z0-9.:[\]-]+$/.test(url.host)) {
+      return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, '')}`;
+    }
+  } catch (_) { /* fall through */ }
+  return 'ws://localhost';
 }
 
 // Everything a new reverse backend needs: its URL plus ready-to-run commands per platform.
 function connectInfo(req, record) {
   const url = `${reverseBase(req)}${backends.REVERSE_PREFIX}${encodeURIComponent(record.id)}`;
-  const args = `server -connect '${url}' -token '${record.token}'`;
+  const args = `server -connect ${sq(url)} -token ${sq(record.token)}`;
+  const probe = mode => `wget -N ${sq(SCRIPT_URL)} && bash node-watcher.sh probe${mode ? ` --mode ${mode}` : ''} --connect ${sq(url)} --token ${sq(record.token)}`;
   return {
     url,
     token: record.token,
     secure: url.startsWith('wss://'),
-    script: `wget -N ${SCRIPT_URL} && bash node-watcher.sh probe --connect '${url}' --token '${record.token}'`,
+    script: probe(null),
+    scriptBinary: probe('binary'),
     docker: `docker run -d --name miaospeed --restart unless-stopped ${MIAOSPEED_IMAGE} ${args}`,
     binary: `./miaospeed ${args}`,
+    // url (validated above) and token (base64url) contain no characters cmd.exe treats specially.
     windows: `miaospeed.exe server -connect "${url}" -token "${record.token}"`
   };
 }

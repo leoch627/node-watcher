@@ -14,6 +14,13 @@ default_master_image=ghcr.1ms.run/leoch627/node-watcher:latest
 default_miaospeed_image=airportr/miaospeed:4.7.8
 default_acme_image=neilpang/acme.sh:3.1.5
 hub_mirror=docker.1ms.run
+miaospeed_version=4.7.8
+# Paths for the binary probe; the overrides exist for the installer tests.
+miaospeed_bin=${NODE_WATCHER_MIAOSPEED_BIN:-/usr/local/bin/miaospeed}
+systemd_unit_dir=${NODE_WATCHER_SYSTEMD_DIR:-/etc/systemd/system}
+systemd_runtime_dir=${NODE_WATCHER_SYSTEMD_RUNTIME:-/run/systemd/system}
+openrc_dir=${NODE_WATCHER_OPENRC_DIR:-/etc/init.d}
+probe_log_dir=${NODE_WATCHER_LOG_DIR:-/var/log}
 shortcut_path=${NODE_WATCHER_SHORTCUT:-/usr/local/bin/nw}
 shortcut_name=${shortcut_path##*/}
 
@@ -62,6 +69,7 @@ usage() {
       bash node-watcher.sh [install|update] [选项]           部署 / 更新主控（面板）
       bash node-watcher.sh [部署目录 [端口 [用户名 [密码]]]]
       bash node-watcher.sh probe --connect URL --token TOKEN [选项]   部署 / 更新探针（miaospeed）
+      bash node-watcher.sh probe --mode binary --connect URL --token TOKEN 以二进制 + 系统服务部署探针（无需 Docker）
 主控选项：
   -d, --dir PATH          部署目录，默认 /opt/node-watcher
   -p, --port PORT         面板对外端口（1-65535），首次默认随机选择 1000-10000；使用域名时不需要
@@ -79,8 +87,11 @@ usage() {
       --connect URL       主控面板「设置 → miaospeed 后端」添加反向后端后给出的连接地址
                           （wss://主控域名/miaospeed/reverse/<ID>）
       --token TOKEN       同一处给出的 token；更新时可省略这两项，沿用已保存的值
+      --mode docker|binary 部署方式，默认 docker（首次）/ 沿用上次；binary 下载官方 miaospeed 二进制（SHA-256 校验），
+                          注册为 systemd 服务（Alpine 为 OpenRC），开机自启、退出后自动重启，不安装 Docker，
+                          适合树莓派 / 小内存机器；切换方式时会移除另一种部署
   -d, --dir PATH          部署目录，默认 /opt/node-watcher-probe
-      --name NAME         容器名称，默认 miaospeed
+      --name NAME         容器 / 服务名称，默认 miaospeed
 通用选项：
       --no-install        不自动安装依赖（适合已配置 Docker 的 NAS）
   -h, --help              显示帮助
@@ -100,7 +111,8 @@ DNS 验证的 API 凭据不要写在命令行里：先 export 对应的 acme.sh 
       bash node-watcher.sh --domain monitor.example.com
       export CF_Token='…'; sudo -E bash node-watcher.sh --domain monitor.example.com --acme dns --dns-provider cf
       bash node-watcher.sh probe --connect 'wss://monitor.example.com/miaospeed/reverse/m-1a2b3c4d' --token '…'
-主控支持 Linux x86_64 / ARM64，探针另支持 ARMv7 / x86；缺少依赖时自动安装，需要 root 或 sudo。
+      bash node-watcher.sh probe --mode binary --connect 'wss://monitor.example.com/miaospeed/reverse/m-1a2b3c4d' --token '…'
+主控支持 Linux x86_64 / ARM64；探针 Docker 方式另支持 ARMv7 / x86，二进制方式另支持 ARMv6 / RISC-V 64；缺少依赖时自动安装，需要 root 或 sudo。
 默认国内加速：GitHub 使用 ghfast.top，Docker CE 使用清华源，镜像使用毫秒镜像 1ms.run。
 HELP
 }
@@ -125,6 +137,7 @@ no_domain=false
 connect_override=''
 token_override=''
 probe_name_override=''
+probe_mode_override=''
 auto_install=true
 positional=0
 named_options=false
@@ -145,8 +158,8 @@ while [[ $# -gt 0 ]]; do
     --no-domain) no_domain=true; named_options=true; shift ;;
     --join|--join=*|--probe-port|--probe-port=*|--public-host|--public-host=*|--no-probes)
       fail "${1%%=*} 已移除。${removed_option_hint}" ;;
-    -d|-p|-u|-P|--dir|--port|--username|--password|--domain|--acme|--dns-provider|--acme-email|--http-port|--https-port|--connect|--token|--name|\
-    --dir=*|--port=*|--username=*|--password=*|--domain=*|--acme=*|--dns-provider=*|--acme-email=*|--http-port=*|--https-port=*|--connect=*|--token=*|--name=*)
+    -d|-p|-u|-P|--dir|--port|--username|--password|--domain|--acme|--dns-provider|--acme-email|--http-port|--https-port|--connect|--token|--name|--mode|\
+    --dir=*|--port=*|--username=*|--password=*|--domain=*|--acme=*|--dns-provider=*|--acme-email=*|--http-port=*|--https-port=*|--connect=*|--token=*|--name=*|--mode=*)
       [[ $positional -eq 0 ]] || fail '请勿混用位置参数与命名参数。'
       named_options=true
       option=${1%%=*}
@@ -171,6 +184,7 @@ while [[ $# -gt 0 ]]; do
         --connect) connect_override=$value ;;
         --token) token_override=$value ;;
         --name) probe_name_override=$value ;;
+        --mode) probe_mode_override=$value ;;
       esac
       ;;
     -*) fail "未知选项：$1；使用 --help 查看用法。" ;;
@@ -198,6 +212,9 @@ provider_pattern='^[a-z0-9_]+$'
 email_pattern='^[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,63}$'
 connect_pattern='^wss?://(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?(/[A-Za-z0-9._~%+-]+)*/miaospeed/reverse/[A-Za-z0-9._~%+-]+$'
 token_pattern='^[[:graph:]]+$'
+# Binary probes read the token from a systemd / OpenRC environment file: keep it to characters
+# that mean the same in every format (master-generated tokens are base64url).
+binary_token_pattern='^[A-Za-z0-9._~+/=:@%-]+$'
 container_name_pattern='^[a-z0-9][a-z0-9_-]{0,62}$'
 env_name_pattern='^[A-Za-z_][A-Za-z0-9_]*$'
 
@@ -223,7 +240,16 @@ valid_email() {
 }
 
 valid_connect() {
-  [[ ${#1} -le 512 && "$1" =~ $connect_pattern ]]
+  local authority port
+  [[ ${#1} -le 512 && "$1" =~ $connect_pattern ]] || return 1
+  authority=${1#*://}
+  authority=${authority%%/*}
+  authority=${authority##*]}
+  if [[ "$authority" == *:* ]]; then
+    port=${authority##*:}
+    valid_port "$port" || return 1
+  fi
+  return 0
 }
 
 valid_token() {
@@ -278,6 +304,10 @@ case "$mode" in
     if [[ -n "$token_override" ]]; then
       valid_token "$token_override" || fail "$token_hint"
     fi
+    if [[ -n "$probe_mode_override" ]]; then
+      probe_mode_override=$(lowercase "$probe_mode_override")
+      [[ "$probe_mode_override" == docker || "$probe_mode_override" == binary ]] || fail '--mode 只能是 docker 或 binary。'
+    fi
     if [[ -n "$probe_name_override" ]]; then
       [[ "$probe_name_override" =~ $container_name_pattern ]] || fail '--name 只能包含小写字母、数字、- 和 _，并以字母或数字开头。'
       case "$probe_name_override" in
@@ -289,8 +319,8 @@ case "$mode" in
     [[ "$named_options" == false && $positional -eq 0 ]] || fail 'menu 子命令只支持 --no-install。'
     ;;
   *)
-    [[ -z "$connect_override$token_override$probe_name_override" ]] \
-      || fail "--connect / --token / --name 只用于探针：bash node-watcher.sh probe --connect '<连接地址>' --token '<token>'。"
+    [[ -z "$connect_override$token_override$probe_name_override$probe_mode_override" ]] \
+      || fail "--connect / --token / --name / --mode 只用于探针：bash node-watcher.sh probe --connect '<连接地址>' --token '<token>'。"
     deploy_dir=${deploy_dir:-$default_master_dir}
     ;;
 esac
@@ -316,7 +346,8 @@ require_arch() {
     fail "miaospeed 镜像支持 x86_64 / ARM64 / ARMv7 / x86，当前系统架构 ${machine_arch} 不支持。"
   fi
 }
-if [[ "$mode" != menu ]]; then require_arch "$mode"; fi
+# Probe architectures depend on --mode and are checked in resolve_probe_settings.
+if [[ "$mode" == master ]]; then require_arch master; fi
 
 if [[ "$(id -u)" != 0 ]]; then
   if command -v sudo >/dev/null 2>&1 && [[ -f "$0" ]]; then
@@ -640,7 +671,7 @@ require_docker_tools() {
 # Keep values from the caller's shell out of Compose interpolation: the .env file is authoritative.
 scrub_compose_env() {
   unset NODE_WATCHER_IMAGE PORT AUTH_USERNAME AUTH_PASSWORD AUTH_SESSION_SECRET AUTH_SESSION_TTL_HOURS
-  unset AUTH_COOKIE_SECURE TRUST_PROXY NODE_WATCHER_VOLUME_LABEL DOCKER_DEFAULT_PLATFORM
+  unset AUTH_COOKIE_SECURE TRUST_PROXY LOG_CONSOLE NODE_WATCHER_VOLUME_LABEL DOCKER_DEFAULT_PLATFORM
   unset MIAOSPEED_LOCAL LOCAL_PROBE_NAME MIAOSPEED_MMDB MIAOSPEED_PUBLIC_URL
   unset HTTP_HOST_PORT HTTPS_HOST_PORT ACME_IMAGE
   unset MIAOSPEED_IMAGE MIAOSPEED_CONTAINER MIAOSPEED_CONNECT MIAOSPEED_TOKEN
@@ -984,6 +1015,7 @@ COMPOSE
       AUTH_SESSION_TTL_HOURS: ${AUTH_SESSION_TTL_HOURS:-24}
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
       TRUST_PROXY: ${TRUST_PROXY:-0}
+      LOG_CONSOLE: ${LOG_CONSOLE:-true}
       MIAOSPEED_LOCAL: ${MIAOSPEED_LOCAL:-true}
       LOCAL_PROBE_NAME: ${LOCAL_PROBE_NAME:-}
       MIAOSPEED_MMDB: ${MIAOSPEED_MMDB:-}
@@ -1304,14 +1336,292 @@ warn_plain_websocket() {
   warn '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
 }
 
+probe_mode=docker
+probe_init=''
 resolve_probe_settings() {
-  local env_file="$deploy_dir/.env"
+  local env_file="$deploy_dir/.env" saved_mode token
+  saved_mode=$(setting_value MIAOSPEED_MODE "$env_file")
+  probe_mode=${probe_mode_override:-${saved_mode:-docker}}
+  if [[ "$probe_mode" != binary ]]; then probe_mode=docker; fi
   if { [[ -z "$connect_override" ]] && setting_missing MIAOSPEED_CONNECT "$env_file"; } \
     || { [[ -z "$token_override" ]] && setting_missing MIAOSPEED_TOKEN "$env_file"; }; then
     fail "首次部署探针需要连接地址和 token：bash node-watcher.sh probe --connect 'wss://主控域名/miaospeed/reverse/<ID>' --token '<token>'（在主控面板「设置 → miaospeed 后端」添加反向后端后复制）。"
   fi
+  if [[ "$probe_mode" == binary ]]; then
+    [[ -n "$(miaospeed_target)" ]] || fail "miaospeed 没有 ${machine_arch} 架构的二进制版本（支持 x86_64 / ARM64 / ARMv7 / ARMv6 / x86 / RISC-V 64）。"
+    token=${token_override:-$(setting_value MIAOSPEED_TOKEN "$env_file")}
+    [[ "$token" =~ $binary_token_pattern ]] \
+      || fail '二进制方式的 token 只能包含字母、数字和 ._~+/=:@%-（主控生成的 token 都符合）；其他 token 请改用 Docker 方式（--mode docker）。'
+    probe_init=$(detect_init_system)
+    [[ -n "$probe_init" ]] \
+      || fail '当前系统既没有 systemd 也没有 OpenRC，无法以二进制方式常驻运行；请改用 Docker 方式：bash node-watcher.sh probe --mode docker --connect … --token …'
+  elif [[ "$compose_arch" == unsupported ]]; then
+    fail "miaospeed Docker 镜像不支持 ${machine_arch}；请改用二进制方式：bash node-watcher.sh probe --mode binary --connect … --token …"
+  fi
   if [[ -n "$connect_override" ]]; then warn_plain_websocket "$connect_override"; fi
   return 0
+}
+
+# ---- binary probes ----------------------------------------------------------------------------
+miaospeed_target() {
+  case "$machine_arch" in
+    x86_64|amd64) printf 'linux-amd64' ;;
+    aarch64|arm64) printf 'linux-arm64' ;;
+    armv7l|armv7|armhf) printf 'linux-armv7' ;;
+    armv6l|armv6) printf 'linux-armv6' ;;
+    i386|i486|i586|i686|x86) printf 'linux-386' ;;
+    riscv64) printf 'linux-riscv64' ;;
+  esac
+  return 0
+}
+
+# SHA-256 of miaospeed-<target>-4.7.8.tar.gz (same values as scripts/setup-binaries.js).
+miaospeed_sha256() {
+  case "$1" in
+    linux-amd64) printf 'd41769a94deed8d5a52d52fb4f3c227bd5f397c481003f21225b8756e829767a' ;;
+    linux-arm64) printf '8192b2a2dc3eac398cbafb595d376036c3a9dee699ce253596f50da1d3ebd92b' ;;
+    linux-armv7) printf '11cf326c4109ff96c98070cfccfa93523ae563371759a40029f267175fc3ac44' ;;
+    linux-armv6) printf '9514f88f0d119c8202dea4d44c2df5eb58ebce9579d2002c9d9e273fff7f2be5' ;;
+    linux-386) printf '656ad934d145c8168dc1a4ec412bb765d4fc70c9fd099c1302c386c72dd5badf' ;;
+    linux-riscv64) printf 'abfc0934e97b1563caf7b6649f9d494b9408f6814282c9d3ce8d57053462b30e' ;;
+  esac
+  return 0
+}
+
+detect_init_system() {
+  if command -v systemctl >/dev/null 2>&1 && [[ -d "$systemd_runtime_dir" ]]; then
+    printf 'systemd'
+  elif command -v openrc-run >/dev/null 2>&1 && command -v rc-service >/dev/null 2>&1; then
+    printf 'openrc'
+  fi
+  return 0
+}
+
+# Binary probes need no Docker: only a downloader, openssl (checksum) and tar.
+prepare_binary_tools() {
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    install_packages ca-certificates curl
+  fi
+  command -v openssl >/dev/null 2>&1 || install_packages openssl
+  command -v tar >/dev/null 2>&1 || install_packages tar
+  command -v gzip >/dev/null 2>&1 || install_packages gzip
+  for command_name in awk mktemp; do
+    command -v "$command_name" >/dev/null 2>&1 || fail "缺少 ${command_name}，请先安装后重试。"
+  done
+}
+
+install_miaospeed_binary() {
+  local target expected url archive actual extracted directory=${miaospeed_bin%/*}
+  target=$(miaospeed_target)
+  expected=$(miaospeed_sha256 "$target")
+  if [[ "$(setting_value MIAOSPEED_BINARY)" == "${miaospeed_version}/${target}" && -x "$miaospeed_bin" ]]; then
+    printf 'miaospeed %s（%s）已安装：%s\n' "$miaospeed_version" "$target" "$miaospeed_bin"
+    return 0
+  fi
+  [[ -n "$download_dir" ]] || download_dir=$(mktemp -d "${TMPDIR:-/tmp}/node-watcher.XXXXXX")
+  archive="$download_dir/miaospeed-${target}.tar.gz"
+  url="https://github.com/AirportR/miaospeed/releases/download/${miaospeed_version}/miaospeed-${target}-${miaospeed_version}.tar.gz"
+  printf '正在下载 miaospeed %s（%s）……\n' "$miaospeed_version" "$target"
+  rm -f -- "$archive"
+  download "$url" "$archive" || fail 'miaospeed 下载失败，请检查 GitHub 加速 ghfast.top 的连接后重试，或改用 Docker 方式（--mode docker）。'
+  actual=$(openssl dgst -sha256 "$archive" | awk '{print $NF}')
+  if [[ "$actual" != "$expected" ]]; then
+    rm -f -- "$archive"
+    fail "miaospeed 安装包 SHA-256 校验失败（期望 ${expected}，实际 ${actual}），已停止，未安装任何文件。"
+  fi
+  mkdir -p "$download_dir/miaospeed"
+  tar -xzf "$archive" -C "$download_dir/miaospeed" "miaospeed-${target}" || fail 'miaospeed 安装包解压失败。'
+  extracted="$download_dir/miaospeed/miaospeed-${target}"
+  [[ -f "$extracted" && ! -L "$extracted" ]] || fail "miaospeed 安装包中没有 miaospeed-${target}。"
+  mkdir -p "$directory"
+  temporary_file=$(mktemp "${directory}/.miaospeed.XXXXXX")
+  cat -- "$extracted" > "$temporary_file"
+  chmod 755 "$temporary_file"
+  mv -f -- "$temporary_file" "$miaospeed_bin"
+  temporary_file=''
+  put_setting MIAOSPEED_BINARY "${miaospeed_version}/${target}"
+  printf 'miaospeed 已安装：%s\n' "$miaospeed_bin"
+}
+
+managed_file() {
+  [[ -f "$1" ]] && awk 'NR <= 3 && /managed by node-watcher\.sh/ { found = 1 } END { exit !found }' "$1" 2>/dev/null
+}
+
+systemd_unit_path() { printf '%s/%s.service' "$systemd_unit_dir" "$1"; }
+openrc_script_path() { printf '%s/%s' "$openrc_dir" "$1"; }
+openrc_log_path() { printf '%s/%s.log' "$probe_log_dir" "$1"; }
+
+write_systemd_unit() {  # file
+  {
+    printf '# miaospeed reverse link for Node Watcher, managed by node-watcher.sh\n'
+    printf '# node-watcher-probe-dir: %s\n' "$deploy_dir"
+    cat <<'UNIT'
+[Unit]
+Description=miaospeed backend for Node Watcher (reverse link)
+Documentation=https://github.com/leoch627/node-watcher
+After=network-online.target
+Wants=network-online.target
+# miaospeed reconnects by itself while the master is unreachable; this only stops a crash loop.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+UNIT
+    printf 'EnvironmentFile=%s/.env\n' "${deploy_dir//%/%%}"
+    printf 'ExecStart=%s server -connect ${MIAOSPEED_CONNECT} -token ${MIAOSPEED_TOKEN}\n' "${miaospeed_bin//%/%%}"
+    cat <<'UNIT'
+Restart=on-failure
+RestartSec=5
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  } > "$1"
+}
+
+write_openrc_script() {  # file name
+  {
+    printf '#!/sbin/openrc-run\n'
+    printf '# miaospeed reverse link for Node Watcher, managed by node-watcher.sh\n'
+    printf '# node-watcher-probe-dir: %s\n' "$deploy_dir"
+    printf 'description="miaospeed backend for Node Watcher (reverse link)"\n'
+    printf 'command=%q\n' "$miaospeed_bin"
+    printf 'output_log=%q\n' "$(openrc_log_path "$2")"
+    printf 'error_log=%q\n' "$(openrc_log_path "$2")"
+    printf 'set -a\n. %q\nset +a\n' "$deploy_dir/.env"
+    cat <<'RC'
+command_args="server -connect \"\${MIAOSPEED_CONNECT}\" -token \"\${MIAOSPEED_TOKEN}\""
+command_user="nobody:nobody"
+supervisor=supervise-daemon
+# Give up after 5 crashes within 5 minutes; miaospeed reconnects by itself when the master is down.
+respawn_delay=5
+respawn_max=5
+respawn_period=300
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	checkpath --file --owner nobody:nobody --mode 0640 "$output_log"
+}
+RC
+  } > "$1"
+}
+
+install_probe_service() {  # name
+  local file
+  if [[ "$probe_init" == systemd ]]; then
+    file=$(systemd_unit_path "$1")
+    [[ ! -e "$file" ]] || managed_file "$file" || fail "${file} 已存在且不是本脚本创建的，请用 --name 指定其他名称。"
+    mkdir -p "$systemd_unit_dir"
+    temporary_file=$(mktemp "${systemd_unit_dir}/.${1}.XXXXXX")
+    write_systemd_unit "$temporary_file"
+    chmod 644 "$temporary_file"
+    mv -f -- "$temporary_file" "$file"
+    temporary_file=''
+    systemctl daemon-reload
+    systemctl reset-failed "$1.service" >/dev/null 2>&1 || true
+    systemctl enable "$1.service"
+    systemctl restart "$1.service" || fail "${1} 服务启动失败：请查看 systemctl status ${1} 和 journalctl -u ${1} -n 50。"
+  else
+    file=$(openrc_script_path "$1")
+    [[ ! -e "$file" ]] || managed_file "$file" || fail "${file} 已存在且不是本脚本创建的，请用 --name 指定其他名称。"
+    mkdir -p "$openrc_dir" "$probe_log_dir"
+    temporary_file=$(mktemp "${openrc_dir}/.${1}.XXXXXX")
+    write_openrc_script "$temporary_file" "$1"
+    chmod 755 "$temporary_file"
+    mv -f -- "$temporary_file" "$file"
+    temporary_file=''
+    rc-update add "$1" default >/dev/null 2>&1 || true
+    rc-service "$1" restart || fail "${1} 服务启动失败：请查看 rc-service ${1} status 和 $(openrc_log_path "$1")。"
+  fi
+}
+
+# Stop and delete a binary probe service created by this script (no-op otherwise).
+remove_probe_service() {  # name
+  local file
+  file=$(systemd_unit_path "$1")
+  if managed_file "$file"; then
+    if command -v systemctl >/dev/null 2>&1; then systemctl disable --now "$1.service" </dev/null >/dev/null 2>&1 || true; fi
+    rm -f -- "$file"
+    if command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload </dev/null >/dev/null 2>&1 || true; fi
+    say yellow "已停止并删除 systemd 服务 ${1}。"
+  fi
+  file=$(openrc_script_path "$1")
+  if managed_file "$file"; then
+    rc-service "$1" stop </dev/null >/dev/null 2>&1 || true
+    rc-update del "$1" default </dev/null >/dev/null 2>&1 || true
+    rm -f -- "$file"
+    say yellow "已停止并删除 OpenRC 服务 ${1}。"
+  fi
+  return 0
+}
+
+probe_service_installed() {  # name
+  managed_file "$(systemd_unit_path "$1")" || managed_file "$(openrc_script_path "$1")"
+}
+
+probe_state() {  # mode name
+  local state=''
+  if [[ "$1" == docker ]]; then
+    container_state "$2"
+  elif [[ "$probe_init" == systemd ]]; then
+    state=$(systemctl is-active "$2.service" 2>/dev/null </dev/null) || true
+    case "$state" in
+      active|activating|reloading) printf 'running' ;;
+      *) printf '%s' "${state:-unknown}" ;;
+    esac
+  elif rc-service "$2" status </dev/null >/dev/null 2>&1; then
+    printf 'running'
+  else
+    printf 'stopped'
+  fi
+  return 0
+}
+
+probe_recent_logs() {  # mode name
+  local invocation=''
+  if [[ "$1" == docker ]]; then
+    docker logs --tail 60 "$2" 2>&1 </dev/null || true
+  elif [[ "$probe_init" == systemd ]]; then
+    invocation=$(systemctl show -p InvocationID --value "$2.service" 2>/dev/null </dev/null) || invocation=''
+    if [[ -n "$invocation" ]]; then
+      journalctl "_SYSTEMD_INVOCATION_ID=${invocation}" -n 60 --no-pager -o cat 2>/dev/null </dev/null || true
+    else
+      journalctl -u "$2.service" -n 60 --no-pager -o cat 2>/dev/null </dev/null || true
+    fi
+  else
+    tail -n 60 "$(openrc_log_path "$2")" 2>/dev/null || true
+  fi
+  return 0
+}
+
+print_probe_service_hints() {  # name
+  if [[ "$probe_init" == systemd ]]; then
+    printf '运行方式：二进制 + systemd 服务 %s（开机自启；崩溃后 5 秒自动重启，5 分钟内崩溃 5 次则停止重试）\n' "$1"
+    printf '查看状态：systemctl status %s\n' "$1"
+    printf '查看日志：journalctl -u %s -n 50（实时：journalctl -u %s -f）\n' "$1" "$1"
+    printf '手动重启：systemctl reset-failed %s && systemctl start %s\n' "$1" "$1"
+  else
+    printf '运行方式：二进制 + OpenRC 服务 %s（开机自启；崩溃后 5 秒自动重启，5 分钟内崩溃 5 次则停止重试）\n' "$1"
+    printf '查看状态：rc-service %s status\n' "$1"
+    printf '查看日志：tail -n 50 %s\n' "$(openrc_log_path "$1")"
+    printf '手动重启：rc-service %s restart\n' "$1"
+  fi
 }
 
 probe_hint() {
@@ -1351,7 +1661,7 @@ deploy_probe() {
   enter_deploy_dir
 
   if ! setting_missing NODE_WATCHER_JOIN; then
-    docker rm -f node-watcher-probe </dev/null >/dev/null 2>&1 || true
+    if command -v docker >/dev/null 2>&1; then docker rm -f node-watcher-probe </dev/null >/dev/null 2>&1 || true; fi
     for old_name in NODE_WATCHER_JOIN NODE_WATCHER_IMAGE MEDIA_CONCURRENCY NODE_WATCHER_VOLUME_LABEL; do
       unset_setting "$old_name"
     done
@@ -1364,53 +1674,79 @@ deploy_probe() {
     fail "首次部署探针需要连接地址和 token：bash node-watcher.sh probe --connect 'wss://主控域名/miaospeed/reverse/<ID>' --token '<token>'（在主控面板「设置 → miaospeed 后端」添加反向后端后复制）。"
   fi
   connect_url=$(setting_value MIAOSPEED_CONNECT)
+  master_address=$(url_authority "$connect_url")
 
   old_name=$(setting_value MIAOSPEED_CONTAINER)
   name=${probe_name_override:-${old_name:-miaospeed}}
   [[ "$name" =~ $container_name_pattern ]] || fail ".env 中的 MIAOSPEED_CONTAINER（${name}）无效，请用 --name 重新指定。"
-  # A container with this name that this script did not create would block "compose up".
-  if owner=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$name" 2>/dev/null </dev/null); then
-    if [[ "$owner" != "$name" ]]; then
-      fail "已存在名为 ${name} 的容器（不是本脚本创建的，例如之前手动 docker run 的 miaospeed）。请先删除：docker rm -f ${name}，或用 --name 指定其他名称。"
+
+  if [[ "$probe_mode" == binary ]]; then
+    # Switching from Docker (or renaming): remove the container this directory ran before.
+    if [[ -f compose.deploy.yml ]]; then
+      if command -v docker >/dev/null 2>&1; then
+        docker rm -f "${old_name:-miaospeed}" </dev/null >/dev/null 2>&1 || true
+        say yellow "已移除 Docker 方式部署的探针容器 ${old_name:-miaospeed}。"
+      fi
+      rm -f -- compose.deploy.yml
     fi
-  fi
-  if [[ -n "$old_name" && "$old_name" != "$name" ]]; then
-    docker rm -f "$old_name" </dev/null >/dev/null 2>&1 || true
-  fi
-  put_setting MIAOSPEED_CONTAINER "$name"
-  managed_hub_image MIAOSPEED_IMAGE "$default_miaospeed_image"
+    if [[ -n "$old_name" && "$old_name" != "$name" ]]; then remove_probe_service "$old_name"; fi
+    put_setting MIAOSPEED_MODE binary
+    put_setting MIAOSPEED_CONTAINER "$name"
+    printf '部署目录：%s\n运行方式：二进制（%s）\n主控地址：%s\n' "$deploy_dir" "$probe_init" "$master_address"
+    install_miaospeed_binary
+    install_probe_service "$name"
+  else
+    # Switching from the binary service: stop and delete it first.
+    if probe_service_installed "${old_name:-$name}"; then
+      remove_probe_service "${old_name:-$name}"
+      rm -f -- "$miaospeed_bin"
+      unset_setting MIAOSPEED_BINARY
+    fi
+    # A container with this name that this script did not create would block "compose up".
+    if owner=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$name" 2>/dev/null </dev/null); then
+      if [[ "$owner" != "$name" ]]; then
+        fail "已存在名为 ${name} 的容器（不是本脚本创建的，例如之前手动 docker run 的 miaospeed）。请先删除：docker rm -f ${name}，或用 --name 指定其他名称。"
+      fi
+    fi
+    if [[ -n "$old_name" && "$old_name" != "$name" ]]; then
+      docker rm -f "$old_name" </dev/null >/dev/null 2>&1 || true
+    fi
+    put_setting MIAOSPEED_MODE docker
+    put_setting MIAOSPEED_CONTAINER "$name"
+    managed_hub_image MIAOSPEED_IMAGE "$default_miaospeed_image"
 
-  temporary_file=$(mktemp "${deploy_dir}/.compose.XXXXXX")
-  write_probe_compose "$temporary_file"
-  mv -- "$temporary_file" compose.deploy.yml
-  temporary_file=''
+    temporary_file=$(mktemp "${deploy_dir}/.compose.XXXXXX")
+    write_probe_compose "$temporary_file"
+    mv -- "$temporary_file" compose.deploy.yml
+    temporary_file=''
 
-  scrub_compose_env
-  compose=("${compose_command[@]}" --project-name "$name" --env-file "$deploy_dir/.env" -f "$deploy_dir/compose.deploy.yml")
-  "${compose[@]}" config --quiet
+    scrub_compose_env
+    compose=("${compose_command[@]}" --project-name "$name" --env-file "$deploy_dir/.env" -f "$deploy_dir/compose.deploy.yml")
+    "${compose[@]}" config --quiet
 
-  master_address=$(url_authority "$connect_url")
-  printf '部署目录：%s\nDocker 平台：%s\n主控地址：%s\n正在拉取 miaospeed 镜像……\n' "$deploy_dir" "$daemon_platform" "$master_address"
-  if ! "${compose[@]}" pull; then
-    fail "镜像拉取失败，未启动或替换容器。请检查 Docker Hub 加速（毫秒镜像 docker.1ms.run）的访问情况；配置已保留在 ${deploy_dir}/.env，可修改 MIAOSPEED_IMAGE 后重试。"
-  fi
-  if ! "${compose[@]}" up -d --no-build --remove-orphans; then
-    "${compose[@]}" logs --tail=80 >&2 || true
-    fail "探针启动失败，配置已保留在 ${deploy_dir}/.env。"
+    printf '部署目录：%s\nDocker 平台：%s\n主控地址：%s\n正在拉取 miaospeed 镜像……\n' "$deploy_dir" "$daemon_platform" "$master_address"
+    if ! "${compose[@]}" pull; then
+      fail "镜像拉取失败，未启动或替换容器。请检查 Docker Hub 加速（毫秒镜像 docker.1ms.run）的访问情况；配置已保留在 ${deploy_dir}/.env，可修改 MIAOSPEED_IMAGE 后重试，或改用二进制方式（--mode binary）。"
+    fi
+    if ! "${compose[@]}" up -d --no-build --remove-orphans; then
+      "${compose[@]}" logs --tail=80 >&2 || true
+      fail "探针启动失败，配置已保留在 ${deploy_dir}/.env。"
+    fi
   fi
 
   # miaospeed logs "link established" once the master accepted the handshake.
   probe_logs=''
   state=''
   for ((attempt = 0; attempt < 20; attempt++)); do
-    state=$(container_state "$name")
-    probe_logs=$(docker logs --tail 60 "$name" 2>&1 </dev/null) || probe_logs=''
+    state=$(probe_state "$probe_mode" "$name")
+    probe_logs=$(probe_recent_logs "$probe_mode" "$name")
     case "$probe_logs" in
       *'link established'*) connected=true; break ;;
       *'signature mismatch'*|*'handshake rejected'*|*'dial failed'*|*'Invalid -connect'*|*'connection lost'*) error_seen=true; break ;;
     esac
     case "$state" in
-      exited*|dead*|'') break ;;
+      running*|restarting*|created*) ;;
+      *) break ;;
     esac
     sleep 1
   done
@@ -1422,15 +1758,19 @@ deploy_probe() {
     case "$state" in
       running*)
         if [[ "$error_seen" == true ]]; then
-          fail "探针已启动，但暂未连上主控（容器会持续自动重试）。${hint}"
+          if [[ "$probe_mode" == binary ]]; then print_probe_service_hints "$name" >&2; fi
+          fail "探针已启动，但暂未连上主控（miaospeed 会持续自动重连）。${hint}"
         fi
-        warn "探针容器已启动，但 20 秒内未在日志中看到连接成功的记录；请稍后在主控面板「设置 → miaospeed 后端」确认是否在线。"
+        warn "探针已启动，但 20 秒内未在日志中看到连接成功的记录；请稍后在主控面板「设置 → miaospeed 后端」确认是否在线。"
         ;;
-      *) fail "探针容器未能保持运行，配置已保留在 ${deploy_dir}/.env。${hint}" ;;
+      *)
+        if [[ "$probe_mode" == binary ]]; then print_probe_service_hints "$name" >&2; fi
+        fail "探针未能保持运行，配置已保留在 ${deploy_dir}/.env。${hint}"
+        ;;
     esac
   fi
 
-  "${compose[@]}" ps
+  if [[ "$probe_mode" == docker ]]; then "${compose[@]}" ps; fi
   if [[ "$connected" == true ]]; then
     printf '\n探针部署完成，已连接主控 %s。\n' "$master_address"
   else
@@ -1438,9 +1778,13 @@ deploy_probe() {
   fi
   printf '连接成功后，主控面板「设置 → miaospeed 后端」中该后端显示为在线，即可用它运行测试。\n'
   printf '配置文件：%s/.env（权限 600，包含 token）\n' "$deploy_dir"
-  printf '更新探针：重新运行 bash node-watcher.sh probe（不带 --connect / --token 即沿用已保存的值）。\n'
+  printf '更新探针：重新运行 bash node-watcher.sh probe（不带 --connect / --token 即沿用已保存的值；--mode 可切换部署方式）。\n'
   print_shortcut_hint
-  printf '查看日志：docker logs -f --tail=100 %s\n' "$name"
+  if [[ "$probe_mode" == binary ]]; then
+    print_probe_service_hints "$name"
+  else
+    printf '查看日志：docker logs -f --tail=100 %s\n' "$name"
+  fi
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1562,8 +1906,31 @@ find_install_dir() {  # container default-dir
 master_installed_dir=''
 probe_installed_dir=''
 detect_installs() {
+  local unit dir
   master_installed_dir=$(find_install_dir node-watcher "$default_master_dir")
   probe_installed_dir=$(find_install_dir miaospeed "$default_probe_dir")
+  if [[ -z "$probe_installed_dir" ]]; then
+    for unit in "$(systemd_unit_path miaospeed)" "$(openrc_script_path miaospeed)"; do
+      managed_file "$unit" || continue
+      dir=$(awk '/^# node-watcher-probe-dir: / { sub(/^# node-watcher-probe-dir: /, ""); print; exit }' "$unit")
+      if [[ "$dir" == /* && -f "$dir/.env" ]]; then probe_installed_dir=$dir; break; fi
+    done
+  fi
+  if [[ -z "$probe_installed_dir" && -f "$default_probe_dir/.env" ]] && ! setting_missing MIAOSPEED_CONNECT "$default_probe_dir/.env"; then
+    probe_installed_dir=$default_probe_dir
+  fi
+  probe_init=$(detect_init_system)
+  return 0
+}
+
+probe_mode_of() {  # dir
+  if [[ "$(setting_value MIAOSPEED_MODE "$1/.env")" == binary ]]; then printf 'binary'; else printf 'docker'; fi
+}
+
+probe_name_of() {  # dir
+  local name
+  name=$(setting_value MIAOSPEED_CONTAINER "$1/.env")
+  printf '%s' "${name:-miaospeed}"
 }
 
 state_label() {
@@ -1606,9 +1973,13 @@ show_banner() {
     if ! setting_missing NODE_WATCHER_JOIN "$file"; then
       say yellow "探针：旧版 nwp:// 探针（已停用）· ${probe_installed_dir}，选择 2 重新部署为 miaospeed"
     else
-      name=$(setting_value MIAOSPEED_CONTAINER "$file")
+      name=$(probe_name_of "$probe_installed_dir")
       connect=$(setting_value MIAOSPEED_CONNECT "$file")
-      say green "探针（miaospeed）：已安装 · $(state_label "$(container_state "${name:-miaospeed}")") · 主控 $(url_authority "$connect") · ${probe_installed_dir}"
+      if [[ "$(probe_mode_of "$probe_installed_dir")" == binary ]]; then
+        say green "探针（miaospeed）：已安装 · 二进制（${probe_init:-无服务管理器}）· $(state_label "$(probe_state binary "$name")") · 主控 $(url_authority "$connect") · ${probe_installed_dir}"
+      else
+        say green "探针（miaospeed）：已安装 · Docker · $(state_label "$(container_state "$name")") · 主控 $(url_authority "$connect") · ${probe_installed_dir}"
+      fi
     fi
   else
     say yellow '探针（miaospeed）：未安装'
@@ -1799,18 +2170,30 @@ menu_install_master() {
 }
 
 run_probe_install() {
-  require_arch probe
   resolve_probe_settings
-  prepare_docker probe
+  if [[ "$probe_mode" == binary ]]; then prepare_binary_tools; else prepare_docker probe; fi
   deploy_probe
 }
 
 menu_deploy_probe() {
-  local dir file connect token
+  local dir file connect token saved_mode default_choice choice
   say skyBlue '---------------- 部署探针（miaospeed 反向连接） ----------------'
   ask_directory dir '部署目录' "${probe_installed_dir:-$default_probe_dir}"
   deploy_dir=$dir
   file="$dir/.env"
+  saved_mode=$(setting_value MIAOSPEED_MODE "$file")
+  if [[ "$saved_mode" == binary ]]; then default_choice=2; else default_choice=1; fi
+  say yellow '部署方式：'
+  say yellow '1. Docker（推荐）'
+  say yellow '2. 二进制（systemd 服务，无需 Docker，适合树莓派 / 小内存机器）'
+  while true; do
+    ask choice "请选择 [回车默认 ${default_choice}]: " "$default_choice"
+    case "$choice" in
+      1) probe_mode_override=docker; break ;;
+      2) probe_mode_override=binary; break ;;
+    esac
+    say red ' ---> 请输入 1 或 2'
+  done
   if [[ -f "$file" ]] && ! setting_missing MIAOSPEED_CONNECT "$file" && ! setting_missing MIAOSPEED_TOKEN "$file"; then
     say yellow "读取到已部署的探针：主控 $(url_authority "$(setting_value MIAOSPEED_CONNECT "$file")")"
     if confirm '是否沿用已保存的连接地址和 token？'; then
@@ -1947,9 +2330,24 @@ menu_change_credentials() {
 }
 
 menu_status() {
+  local name
   if [[ -z "$master_installed_dir$probe_installed_dir" ]]; then
     say yellow '未检测到已安装的主控或探针。'
     return 0
+  fi
+  if [[ -n "$probe_installed_dir" && "$(probe_mode_of "$probe_installed_dir")" == binary ]]; then
+    name=$(probe_name_of "$probe_installed_dir")
+    say skyBlue "---------------- 探针（二进制）：${probe_installed_dir} ----------------"
+    if [[ "$probe_init" == systemd ]]; then
+      systemctl status "$name.service" --no-pager </dev/null || true
+      journalctl -u "$name.service" -n 50 --no-pager </dev/null || true
+    elif [[ "$probe_init" == openrc ]]; then
+      rc-service "$name" status </dev/null || true
+      tail -n 50 "$(openrc_log_path "$name")" 2>/dev/null || true
+    fi
+    print_probe_service_hints "$name"
+    probe_installed_dir=''
+    [[ -n "$master_installed_dir" ]] || return 0
   fi
   require_docker_tools
   if [[ -n "$master_installed_dir" ]]; then
@@ -2007,9 +2405,15 @@ uninstall_master() {
 
 uninstall_probe() {
   cd "$probe_installed_dir"
-  probe_compose_for "$probe_installed_dir"
-  scrub_compose_env
-  "${compose[@]}" down --remove-orphans || warn '停止容器失败，请检查 Docker 状态。'
+  if [[ "$(probe_mode_of "$probe_installed_dir")" == binary ]]; then
+    remove_probe_service "$(probe_name_of "$probe_installed_dir")"
+    rm -f -- "$miaospeed_bin"
+  else
+    require_docker_tools
+    probe_compose_for "$probe_installed_dir"
+    scrub_compose_env
+    "${compose[@]}" down --remove-orphans || warn '停止容器失败，请检查 Docker 状态。'
+  fi
   rm -f -- compose.deploy.yml .env
   cd /
   rmdir -- "$probe_installed_dir" 2>/dev/null || true
@@ -2039,9 +2443,8 @@ menu_uninstall() {
     esac
   done
   confirm "确认卸载${label}？" || return 0
-  confirm "再次确认：将停止并删除${label}的容器，是否继续？" || return 0
-  require_docker_tools
-  if [[ "$choice" != 2 && -n "$master_installed_dir" ]]; then uninstall_master; fi
+  confirm "再次确认：将停止并删除${label}的容器 / 服务，是否继续？" || return 0
+  if [[ "$choice" != 2 && -n "$master_installed_dir" ]]; then require_docker_tools; uninstall_master; fi
   if [[ "$choice" != 1 && -n "$probe_installed_dir" ]]; then uninstall_probe; fi
   if [[ -z "$master_installed_dir$probe_installed_dir" ]] && shortcut_is_ours; then
     rm -f -- "$shortcut_path"
@@ -2084,11 +2487,7 @@ run_menu() {
 # ---------------------------------------------------------------------------------------------
 case "$mode" in
   menu) run_menu ;;
-  probe)
-    resolve_probe_settings
-    prepare_docker probe
-    deploy_probe
-    ;;
+  probe) run_probe_install ;;
   *)
     resolve_master_settings
     prepare_docker master

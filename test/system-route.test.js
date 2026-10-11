@@ -35,7 +35,7 @@ const put = (base, body) => fetch(`${base}/monitoring`, {
 test('invalid monitoring settings are rejected and nothing is applied', async () => {
   await withServer(async base => {
     for (const body of [
-      { checkIntervalMinutes: 0 }, { retryAttempts: 9 }, { failureThreshold: 0 }, { concurrency: 64 },
+      { checkIntervalMinutes: 0 }, { retryAttempts: 9 }, { failureThreshold: 0 }, { timeoutSeconds: 11 },
       { timeoutSeconds: 1.5 }, { customHealthCheckUrl: 'ftp://example.com' }
     ]) {
       const response = await put(base, body);

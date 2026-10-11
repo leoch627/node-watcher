@@ -1,19 +1,23 @@
 // "Deep tests" run on a miaospeed backend: latency/UDP, download speed and topology (GeoIP of the
 // entry and exit). One job at a time; finished jobs are kept as JSON in data/deep-tests.
 const crypto = require('crypto');
+const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
 const logger = require('../utils/logger');
 const backends = require('../miaospeed/backends');
 const { runForNodes } = require('../miaospeed/tasks');
 const { MATRIX } = require('../miaospeed/protocol');
+const scripts = require('../miaospeed/scripts');
 
 const HISTORY_LIMIT = 30;
 
 const PRESETS = {
   latency: { label: '延迟测试', matrices: [MATRIX.RTT, MATRIX.HTTP, MATRIX.UDP] },
   speed: { label: '测速', matrices: [MATRIX.RTT, MATRIX.HTTP, MATRIX.SPEED_AVG, MATRIX.SPEED_MAX, MATRIX.SPEED_SERIES, MATRIX.UDP] },
-  topology: { label: '拓扑分析', matrices: [MATRIX.GEO_IN, MATRIX.GEO_OUT] }
+  topology: { label: '拓扑分析', matrices: [MATRIX.GEO_IN, MATRIX.GEO_OUT] },
+  // Plus one TEST_SCRIPT matrix per selected miaospeed-scripts check.
+  unlock: { label: '解锁测试', matrices: [MATRIX.RTT, MATRIX.HTTP, MATRIX.GEO_OUT] }
 };
 
 const DOWNLOAD_URLS = {
@@ -63,8 +67,11 @@ function compactResult(result) {
   return Object.keys(scripts || {}).length ? { ...rest, scripts } : rest;
 }
 
-class DeepTestService {
-  constructor({ dataDir, getNodes, manager = backends } = {}) {
+// Events: 'progress' (job) after each node result, 'done' (job) when a job ends in any state.
+class DeepTestService extends EventEmitter {
+  constructor({ dataDir, getNodes, manager = backends, unlockScripts } = {}) {
+    super();
+    this.unlockScripts = unlockScripts || (() => require('./scheduler').unlockSettings().scripts);
     this.dir = path.join(dataDir || path.join(process.cwd(), 'data'), 'deep-tests');
     this.getNodes = getNodes || (() => require('./scheduler').nodes);
     this.manager = manager;
@@ -139,6 +146,10 @@ class DeepTestService {
 
   options(preset, input = {}) {
     const options = { pingAverageOver: intIn(input.pingAverageOver, 1, 16, 3), taskRetry: intIn(input.taskRetry, 1, 10, 3) };
+    if (preset === 'unlock') {
+      const chosen = Array.isArray(input.scripts) ? input.scripts.map(String).filter(id => scripts.meta(id)) : [];
+      options.scripts = chosen.length ? [...new Set(chosen)].slice(0, 30) : this.unlockScripts();
+    }
     if (preset === 'speed') {
       options.downloadDuration = intIn(input.downloadDuration, 1, 30, 5);
       options.downloadThreading = intIn(input.downloadThreading, 1, 32, 1);
@@ -147,13 +158,16 @@ class DeepTestService {
     return options;
   }
 
-  start({ preset, backendId, nodeIds, sourceId, include, exclude, options: input } = {}) {
+  // nodes: explicit runtime nodes (e.g. a temporary subscription from the Telegram bot) instead of
+  // the saved node list. requestedBy: who asked ({ source, userId, chatId, username }), kept on the job.
+  start({ preset, backendId, nodes, nodeIds, sourceId, include, exclude, options: input, requestedBy } = {}) {
     if (this.current?.status === 'running') throw Object.assign(new Error('已有深度测试正在运行'), { status: 409 });
     if (!PRESETS[preset]) throw Object.assign(new Error('Unknown test type'), { status: 400 });
     const backend = this.manager.get(backendId || '') || this.manager.available()[0];
     if (!backend) throw Object.assign(new Error('没有可用的 miaospeed 后端'), { status: 409 });
     if (!backend.enabled || backend.online === false) throw Object.assign(new Error(`后端 ${backend.name} 不可用`), { status: 409 });
-    const selected = selectNodes(this.getNodes() || [], { nodeIds, sourceId, include, exclude });
+    const pool = Array.isArray(nodes) ? nodes : (this.getNodes() || []);
+    const selected = selectNodes(pool, { nodeIds, sourceId: Array.isArray(nodes) ? null : sourceId, include, exclude });
     if (selected.length === 0) throw Object.assign(new Error('没有符合条件的节点'), { status: 400 });
     const options = this.options(preset, input);
     const job = {
@@ -162,7 +176,8 @@ class DeepTestService {
       filter: { sourceId: sourceId || null, include: include || '', exclude: exclude || '' }, options,
       total: selected.length, completed: 0, current: null, queuing: null,
       startedAt: new Date().toISOString(), finishedAt: null, durationMs: null, error: null,
-      nodes: selected.map(nodeSnapshot), results: {}
+      nodes: selected.map(nodeSnapshot), results: {},
+      temporary: Array.isArray(nodes), requestedBy: requestedBy || null
     };
     this.current = job;
     this.controller = new AbortController();
@@ -172,6 +187,7 @@ class DeepTestService {
 
   timeoutFor(preset, count, options) {
     if (preset === 'speed') return count * ((options.downloadDuration + 20) * 1000) + 120000;
+    if (preset === 'unlock') return Math.max(240000, count * 30000);
     return Math.max(180000, count * 8000);
   }
 
@@ -182,17 +198,21 @@ class DeepTestService {
       ...(job.preset === 'speed' ? {
         downloadDuration: job.options.downloadDuration, downloadThreading: job.options.downloadThreading,
         downloadUrl: DOWNLOAD_URLS[job.options.downloadSource]
-      } : {})
+      } : {}),
+      ...(job.preset === 'unlock' ? { taskTimeout: 10000 } : {})
     };
+    const unlockIds = job.preset === 'unlock' ? job.options.scripts : [];
+    const matrices = [...PRESETS[job.preset].matrices, ...unlockIds.map(id => ({ type: MATRIX.SCRIPT, params: id }))];
     const names = new Map(nodes.map(node => [node.id, node.name]));
     try {
       const outcome = await runForNodes(job.backend.id, nodes, {
-        matrices: PRESETS[job.preset].matrices, configs, signal, manager: this.manager,
+        matrices, scripts: scripts.forRequest(unlockIds), configs, signal, manager: this.manager,
         timeoutMs: this.timeoutFor(job.preset, nodes.length, job.options),
         onResult: (nodeId, result) => {
           job.results[nodeId] = compactResult(result);
           job.completed = Object.keys(job.results).length;
           job.current = names.get(nodeId) || null;
+          this.emit('progress', job);
         }
       });
       job.version = outcome.version || null;
@@ -210,6 +230,7 @@ class DeepTestService {
       }
       this.controller = null;
       if (job.completed > 0 || job.status === 'completed') this.persist(job);
+      this.emit('done', job);
     }
   }
 

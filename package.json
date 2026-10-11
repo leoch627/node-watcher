@@ -1,7 +1,7 @@
 {
   "name": "node-watcher",
   "version": "2.0.0",
-  "description": "Multi-subscription proxy health and media unlock monitor",
+  "description": "Proxy node monitoring panel for miaospeed: health checks, unlock tests and Koipy-style reports",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
@@ -12,7 +12,7 @@
     "setup:bin": "node scripts/setup-binaries.js"
   },
   "keywords": [
-    "v2board",
+    "miaospeed",
     "monitoring",
     "node-watcher",
     "health-check"

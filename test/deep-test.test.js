@@ -110,3 +110,43 @@ test('flags come from bundled images and other emoji are stripped from text', ()
   assert.ok(svg.flag('jp', 0, 0, 20).startsWith('<svg x="0"'));
   assert.equal(svg.flag('XX', 0, 0, 20), '');
 });
+
+test('subscription traffic headers are parsed', () => {
+  const { parseUserinfo } = require('../src/services/subscription');
+  assert.deepEqual(parseUserinfo('upload=1024; download=2048; total=10737418240; expire=1893456000'),
+    { upload: 1024, download: 2048, total: 10737418240, expire: 1893456000 });
+  assert.deepEqual(parseUserinfo('upload=0;download=5;total=0;expire=0'), { upload: 0, download: 5, total: 0, expire: null });
+  assert.equal(parseUserinfo(''), null);
+  assert.equal(parseUserinfo('foo=bar'), null);
+});
+
+test('unlock jobs run script matrices on explicit nodes, emit events and render the ratio row', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nw-unlock-'));
+  const sent = [];
+  const manager = {
+    get: () => ({ id: 'b1', name: '后端', type: 'local', enabled: true, online: true }), available: () => [],
+    runTask: async (id, request, { onProgress }) => {
+      sent.push(request);
+      const results = request.nodes.map(item => ({ name: item.name, http: 150, rtt: 50,
+        scripts: { netflix: { text: '解锁(US)', background: '186,230,126' }, chatgpt: { text: '失败', background: '239,107,115' } } }));
+      results.forEach(result => onProgress({ result }));
+      return { version: '4.7.8', results };
+    }
+  };
+  const service = new DeepTestService({ dataDir: dir, manager, getNodes: () => [node('saved', 'Saved')], unlockScripts: () => ['netflix'] });
+  const events = [];
+  service.on('progress', job => events.push(['progress', job.completed]));
+  const done = new Promise(resolve => service.once('done', resolve));
+  const temporary = [node('t1', '🇺🇸 Temp 1'), node('t2', 'Temp 2')];
+  const job = service.start({ preset: 'unlock', backendId: 'b1', nodes: temporary, options: { scripts: ['netflix', 'chatgpt', 'nope'] }, requestedBy: { source: 'telegram', userId: '1' } });
+  assert.deepEqual(job.options.scripts, ['netflix', 'chatgpt']);
+  assert.equal(job.temporary, true);
+  assert.deepEqual(job.nodes.map(item => item.id), ['t1', 't2']);
+  const finished = await done;
+  assert.equal(finished.status, 'completed');
+  assert.deepEqual(events.map(event => event[0]), ['progress', 'progress']);
+  assert.ok(sent[0].matrices.some(matrix => matrix.type === 'TEST_SCRIPT' && matrix.params === 'chatgpt'));
+  assert.equal(sent[0].scripts.length, 2);
+  const png = await deepReport.render(finished, { appVersion: 'test' });
+  assert.equal((await sharp(png).metadata()).format, 'png');
+});

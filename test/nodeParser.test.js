@@ -53,7 +53,7 @@ test('parses Clash YAML and creates source-stable unique runtime names', () => {
   assert.equal(nodes[0].subscription, 'Airport');
 });
 
-test('filters incomplete proxies before Mihomo configuration', () => {
+test('filters incomplete proxies before they reach miaospeed', () => {
   const parsed = parseContent(`proxies:\n  - name: Broken\n    type: vmess\n    server: broken.example.com\n    port: 443\n    uuid: not-a-uuid\n`);
   assert.equal(parsed.proxies.length, 0);
 });

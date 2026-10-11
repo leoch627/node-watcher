@@ -17,7 +17,7 @@ function createDeployment(context, options = {}) {
   const callsFile = path.join(temporary, 'docker-calls.jsonl');
   fs.mkdirSync(binaries);
   fs.mkdirSync(directory);
-  for (const command of ['bash', 'sh', 'awk', 'openssl', 'mktemp', 'mkdir', 'touch', 'chmod', 'mv', 'rm', 'cat', 'jq', 'cp', 'tail']) {
+  for (const command of ['bash', 'sh', 'awk', 'openssl', 'mktemp', 'mkdir', 'touch', 'chmod', 'mv', 'rm', 'cat', 'jq', 'cp', 'tail', 'tar', 'gzip']) {
     const resolved = spawnSync('/bin/sh', ['-c', `command -v ${command}`], { encoding: 'utf8' }).stdout.trim();
     fs.symlinkSync(resolved, path.join(binaries, command));
   }
@@ -48,6 +48,7 @@ if (command === 'curl' || command === 'wget') {
   const destination = args[args.indexOf(command === 'curl' ? '-o' : '-O') + 1];
   const source = fs.readFileSync(process.env.MOCK_SOURCE);
   if (url === 'https://ghfast.top/https://raw.githubusercontent.com/docker/docker-install/master/install.sh') fs.writeFileSync(destination, '#!/bin/sh\\nmock-install\\n');
+  else if (url.includes('/AirportR/miaospeed/releases/download/') && process.env.MOCK_MIAOSPEED_ARCHIVE) fs.copyFileSync(process.env.MOCK_MIAOSPEED_ARCHIVE, destination);
   else if (url.endsWith('.sha256')) fs.writeFileSync(destination, process.env.MOCK_BAD_CHECKSUM ? '0'.repeat(64) : crypto.createHash('sha256').update(source).digest('hex'));
   else fs.writeFileSync(destination, source);
 }
@@ -60,6 +61,8 @@ if (command === 'rc-service') {
   if (args.includes('reload') && !process.env.MOCK_RELOAD_FAIL) fs.writeFileSync(mirrorsFile, 'ready');
   if (args.includes('reload') && process.env.MOCK_RELOAD_FAIL) process.exit(1);
 }
+if (command === 'systemctl' && args[0] === 'is-active') console.log(process.env.MOCK_SERVICE_STATE || 'active');
+if (command === 'journalctl') console.log(process.env.MOCK_LOGS ?? 'MiaoSpeed Reverse | [m-1] session#1 link established, remote=203.0.113.7:443');
 if (command === 'docker-compose' && args.includes('version')) {
   console.log(process.env.MOCK_STANDALONE_VERSION || '2.20.0');
   process.exit(0);
@@ -115,6 +118,7 @@ if (command === 'docker' || command === 'docker-compose') {
   const commands = ['docker', 'dockerd', 'uname', 'id', 'hostname', 'chown', 'ss', 'ip', 'curl', 'wget', 'install', 'rc-service', 'rc-update', 'mock-install', 'sleep'];
   if (options.packageManager) commands.push(options.packageManager);
   if (options.standalone) commands.push('docker-compose');
+  if (options.binary) commands.push('systemctl', 'journalctl');
   for (const command of commands.filter(command => command !== options.missing)) {
     fs.writeFileSync(path.join(binaries, command), mock, { mode: 0o755 });
   }
@@ -122,6 +126,13 @@ if (command === 'docker' || command === 'docker-compose') {
   const realMkdir = fs.readlinkSync(path.join(binaries, 'mkdir'));
   fs.unlinkSync(path.join(binaries, 'mkdir'));
   fs.writeFileSync(path.join(binaries, 'mkdir'), `#!${process.execPath}\nconst fs = require('node:fs');\nlet args = process.argv.slice(2);\nfs.appendFileSync(process.env.MOCK_SYSTEM_CALLS, JSON.stringify(['mkdir', ...args]) + '\\n');\nif (process.env.MOCK_DEFAULT_DIR) args = args.map(value => value === '/opt/node-watcher' ? process.env.MOCK_DEFAULT_DIR : value);\nif (!args.includes('/usr/local/lib/docker/cli-plugins')) process.exit(require('node:child_process').spawnSync(${JSON.stringify(realMkdir)}, args).status);\n`, { mode: 0o755 });
+  if (options.binary) {
+    // Lets a test stand in for the pinned release checksum; everything else is the real openssl.
+    const realOpenssl = fs.readlinkSync(path.join(binaries, 'openssl'));
+    fs.unlinkSync(path.join(binaries, 'openssl'));
+    fs.writeFileSync(path.join(binaries, 'openssl'), `#!${process.execPath}\nconst args = process.argv.slice(2);\nif (args[0] === 'dgst' && process.env.MOCK_DIGEST) { console.log('SHA2-256(' + args.at(-1) + ')= ' + process.env.MOCK_DIGEST); process.exit(0); }\nprocess.exit(require('node:child_process').spawnSync(${JSON.stringify(realOpenssl)}, args, { stdio: 'inherit' }).status);\n`, { mode: 0o755 });
+    fs.mkdirSync(path.join(temporary, 'run-systemd'));
+  }
   const bashEnvironment = path.join(temporary, 'bash-env');
   fs.writeFileSync(bashEnvironment, 'cd() { if [[ "$1" == /opt/node-watcher && -n "${MOCK_DEFAULT_DIR:-}" ]]; then builtin cd "$MOCK_DEFAULT_DIR"; else builtin cd "$@"; fi; }\n');
   return {
@@ -143,12 +154,29 @@ if (command === 'docker' || command === 'docker-compose') {
           BASH_ENV: bashEnvironment,
           NODE_WATCHER_DOCKER_CONFIG: path.join(temporary, 'daemon.json'),
           NODE_WATCHER_SHORTCUT: path.join(temporary, 'shortcut', 'nw'),
+          NODE_WATCHER_MIAOSPEED_BIN: path.join(temporary, 'usr-local-bin', 'miaospeed'),
+          NODE_WATCHER_SYSTEMD_DIR: path.join(temporary, 'systemd'),
+          NODE_WATCHER_SYSTEMD_RUNTIME: path.join(temporary, 'run-systemd'),
+          NODE_WATCHER_OPENRC_DIR: path.join(temporary, 'init.d'),
+          NODE_WATCHER_LOG_DIR: path.join(temporary, 'log'),
           ...(options.defaultDirectory ? { MOCK_DEFAULT_DIR: directory } : {}),
           ...overrides
         }
       });
     },
     shortcut: path.join(temporary, 'shortcut', 'nw'),
+    miaospeedBinary: path.join(temporary, 'usr-local-bin', 'miaospeed'),
+    systemdUnit: name => path.join(temporary, 'systemd', `${name}.service`),
+    // A release-shaped archive: miaospeed-<target> + LICENSE.
+    miaospeedArchive(target) {
+      const work = fs.mkdtempSync(path.join(temporary, 'archive-'));
+      fs.writeFileSync(path.join(work, `miaospeed-${target}`), '#!/bin/sh\necho mock miaospeed\n', { mode: 0o755 });
+      fs.writeFileSync(path.join(work, 'LICENSE'), 'AGPL-3.0');
+      const archive = path.join(temporary, `miaospeed-${target}.tar.gz`);
+      const packed = spawnSync('tar', ['-czf', archive, '-C', work, `miaospeed-${target}`, 'LICENSE'], { env: { ...process.env, COPYFILE_DISABLE: '1' } });
+      assert.equal(packed.status, 0, String(packed.stderr));
+      return archive;
+    },
     // Drive the interactive menu with piped answers.
     menu(answers, overrides = {}) {
       return this.run({ NODE_WATCHER_FORCE_MENU: '1', ...overrides }, [], false, answers);
@@ -157,6 +185,7 @@ if (command === 'docker' || command === 'docker-compose') {
       return dotenv.parse(fs.readFileSync(path.join(directory, '.env')));
     },
     calls() {
+      if (!fs.existsSync(callsFile)) return [];
       return fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
     },
     systemCalls() {
@@ -188,6 +217,7 @@ test('deploy script creates secure credentials and uses the prebuilt image on AR
   assert.deepEqual(service.ports, ['${PORT:?PORT must not be empty}:3000']);
   assert.deepEqual(Object.keys(compose.services), ['node-watcher'], 'no acme service without a domain');
   assert.equal(service.environment.HTTPS_PORT, undefined);
+  assert.equal(service.environment.LOG_CONSOLE, '${LOG_CONSOLE:-true}');
   assert.ok(deployment.calls().some(args => args.includes('up') && args.includes('--no-build') && !args.includes('--wait')));
   assert.ok(deployment.calls().some(args => args[0] === 'inspect'));
 });
@@ -631,7 +661,8 @@ test('probe: deploys miaospeed with the token kept in .env (mode 600)', context 
   assert.equal(deployment.config().MIAOSPEED_CONNECT, sampleConnect);
 
   // Invalid URLs are rejected; public ws:// warns loudly; handshake errors are explained.
-  for (const url of ['https://monitor.example.com/miaospeed/reverse/m-1', 'wss://monitor.example.com/other/m-1', 'nwp://p-1:t@h:7443']) {
+  for (const url of ['https://monitor.example.com/miaospeed/reverse/m-1', 'wss://monitor.example.com/other/m-1', 'nwp://p-1:t@h:7443',
+    'wss://monitor.example.com:70000/miaospeed/reverse/m-1', 'ws://[fd00::1]:0/miaospeed/reverse/m-1']) {
     result = deployment.run({}, ['probe', '--connect', url, '--token', sampleToken, '-d', deployment.directory]);
     assert.notEqual(result.status, 0, url);
     assert.match(result.stderr, /连接地址格式不正确/, url);
@@ -679,7 +710,8 @@ test('menu: guided master install with a domain, then reuse of the saved configu
 
 test('menu: guided probe deployment and exit', context => {
   const deployment = createDeployment(context);
-  let result = deployment.menu(['2', deployment.directory, sampleConnect, sampleToken, 'n', ''].join('\n'));
+  // 2 probe → directory → Docker → URL → token → no shortcut
+  let result = deployment.menu(['2', deployment.directory, '1', sampleConnect, sampleToken, 'n', ''].join('\n'));
   assert.equal(result.status, 0, result.stderr);
   assert.equal(deployment.config().MIAOSPEED_TOKEN, sampleToken);
   assert.ok(!result.stdout.includes(sampleToken), 'token is masked');
@@ -687,4 +719,43 @@ test('menu: guided probe deployment and exit', context => {
   result = deployment.menu('0\n');
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /已退出/);
+});
+
+test('probe --mode binary installs the verified release and a systemd service without Docker', context => {
+  const deployment = createDeployment(context, { binary: true });
+  const archive = deployment.miaospeedArchive('linux-arm64');
+  const result = deployment.run({ MOCK_MIAOSPEED_ARCHIVE: archive, MOCK_DIGEST: '8192b2a2dc3eac398cbafb595d376036c3a9dee699ce253596f50da1d3ebd92b' },
+    ['probe', '--mode', 'binary', '--connect', sampleConnect, '--token', sampleToken, '-d', deployment.directory]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(deployment.calls(), [], 'binary mode never touches Docker');
+  assert.ok(deployment.systemCalls().some(args => args[0] === 'curl'
+    && args.at(-1) === 'https://ghfast.top/https://github.com/AirportR/miaospeed/releases/download/4.7.8/miaospeed-linux-arm64-4.7.8.tar.gz'));
+  assert.equal(fs.readFileSync(deployment.miaospeedBinary, 'utf8'), '#!/bin/sh\necho mock miaospeed\n');
+  assert.equal(fs.statSync(deployment.miaospeedBinary).mode & 0o777, 0o755);
+  const config = deployment.config();
+  assert.equal(config.MIAOSPEED_MODE, 'binary');
+  assert.equal(config.MIAOSPEED_TOKEN, sampleToken);
+  assert.equal(fs.statSync(path.join(deployment.directory, '.env')).mode & 0o777, 0o600);
+  const unit = fs.readFileSync(deployment.systemdUnit('miaospeed'), 'utf8');
+  assert.ok(!unit.includes(sampleToken), 'token stays in the environment file');
+  for (const line of [`EnvironmentFile=${fs.realpathSync(deployment.directory)}/.env`, `ExecStart=${deployment.miaospeedBinary} server -connect \${MIAOSPEED_CONNECT} -token \${MIAOSPEED_TOKEN}`,
+    'Restart=on-failure', 'RestartSec=5', 'StartLimitIntervalSec=300', 'StartLimitBurst=5', 'DynamicUser=yes', 'NoNewPrivileges=yes',
+    'ProtectSystem=strict', 'ProtectHome=yes', 'PrivateTmp=yes', 'WantedBy=multi-user.target']) {
+    assert.ok(unit.split('\n').includes(line), line);
+  }
+  const systemctl = deployment.systemCalls().filter(args => args[0] === 'systemctl').map(args => args.slice(1).join(' '));
+  assert.ok(systemctl.includes('daemon-reload') && systemctl.includes('enable miaospeed.service') && systemctl.includes('restart miaospeed.service'));
+  assert.match(result.stdout, /已连接主控 monitor\.example\.com/);
+  assert.match(result.stdout, /systemctl reset-failed miaospeed && systemctl start miaospeed/);
+});
+
+test('probe --mode binary aborts on a checksum mismatch without installing anything', context => {
+  const deployment = createDeployment(context, { binary: true });
+  const result = deployment.run({ MOCK_MIAOSPEED_ARCHIVE: deployment.miaospeedArchive('linux-arm64') },
+    ['probe', '--mode', 'binary', '--connect', sampleConnect, '--token', sampleToken, '-d', deployment.directory]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /SHA-256 校验失败/);
+  assert.equal(fs.existsSync(deployment.miaospeedBinary), false);
+  assert.equal(fs.existsSync(deployment.systemdUnit('miaospeed')), false);
+  assert.ok(!deployment.systemCalls().some(args => args[0] === 'systemctl'));
 });

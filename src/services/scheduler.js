@@ -411,7 +411,7 @@ class SchedulerService {
     const services = {};
     for (const [id, value] of Object.entries(result.scripts || {})) {
       const meta = scripts.meta(id);
-      services[id] = { ...scripts.classify(value), label: meta?.name || id, elapsedMs: value.elapsedMs ?? null, regional: regional.includes(id) };
+      services[id] = { ...scripts.classify(value), background: value.background || '', label: meta?.name || id, elapsedMs: value.elapsedMs ?? null, regional: regional.includes(id) };
     }
     const exit = result.outbound?.main;
     return {
