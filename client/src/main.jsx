@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity, Bell, Cable, Check, ChevronDown, Copy, Download, FileImage, Gauge, Globe2, Import, KeyRound,
-  LoaderCircle, LockKeyhole, LockOpen, LogIn, LogOut, Mail, Network, Pencil, Play, Plus, Radar, RefreshCw, Search,
+  LoaderCircle, LockKeyhole, LockOpen, LogIn, LogOut, Mail, Network, Pencil, Play, Plus, Radar, RefreshCw, ScrollText, Search,
   Send, Server, Settings2, ShieldCheck, Smartphone, Square, Timer, Trash2, WandSparkles, X, Zap
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -10,7 +10,6 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input, Textarea } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipProvider } from '@/components/ui/tooltip';
 import './styles.css';
 
@@ -37,7 +36,7 @@ function formatTime(value) {
 }
 
 function Metric({ label, value, detail, tone }) {
-  return <div className="min-w-0 px-4 py-3 sm:flex-1 sm:px-5 sm:py-4 sm:first:pl-0 sm:last:pr-0">
+  return <div className="min-w-0 rounded-lg border bg-card px-4 py-3.5 shadow-sm">
     <div className="text-xs font-medium text-muted-foreground">{label}</div>
     <div className={`mt-1 text-2xl font-semibold tabular-nums ${tone || ''}`}>{value}</div>
     <div className="mt-0.5 truncate text-xs text-muted-foreground">{detail}</div>
@@ -48,13 +47,22 @@ const unlockVariants = { unlocked: 'success', limited: 'warning', blocked: 'dang
 const unlockText = { unlocked: '解锁', limited: '受限', blocked: '失败', na: 'N/A', error: '未知' };
 
 function unlockTip(value) {
-  return [value.text, value.stale ? `（上次成功结果；最近一次：${value.lastError || '失败'}）` : '', value.elapsedMs ? `耗时 ${value.elapsedMs} ms` : ''].filter(Boolean).join('\n');
+  return [
+    value.lostSince ? `原本解锁${value.lostRegion ? ` ${value.lostRegion}` : ''}，${formatTime(value.lostSince)} 起失效` : '',
+    value.text, value.stale ? `（上次成功结果；最近一次：${value.lastError || '失败'}）` : '', value.elapsedMs ? `耗时 ${value.elapsedMs} ms` : ''
+  ].filter(Boolean).join('\n');
+}
+
+// A red dot marks a service that used to be unlocked on this node and is not any more.
+function LostMark({ value, children }) {
+  if (!value?.lostSince) return children;
+  return <span className="relative inline-flex">{children}<span className="absolute -right-1 -top-1 size-2 rounded-full bg-red-500 ring-2 ring-card" aria-label="解锁失效" /></span>;
 }
 
 function ServiceState({ value }) {
   if (!value) return <span className="text-muted-foreground">-</span>;
   return <Tooltip content={unlockTip(value) || unlockText[value.status]}>
-    <span><Badge variant={unlockVariants[value.status] || 'outline'} className={value.stale ? 'opacity-60' : ''}>{value.status === 'unlocked' && value.region ? value.region : unlockText[value.status] || value.status}</Badge></span>
+    <span className="inline-flex"><LostMark value={value}><Badge variant={unlockVariants[value.status] || 'outline'} className={value.stale ? 'opacity-60' : ''}>{value.status === 'unlocked' && value.region ? value.region : unlockText[value.status] || value.status}</Badge></LostMark></span>
   </Tooltip>;
 }
 
@@ -86,7 +94,7 @@ function RegionalServices({ services }) {
   if (entries.length === 0) return <span className="text-muted-foreground">-</span>;
   return <div className="flex flex-wrap gap-1.5">
     {entries.map(([key, value]) => <Tooltip key={key} content={unlockTip(value)}>
-      <Badge variant={unlockVariants[value.status] || 'outline'} className={value.stale ? 'opacity-60' : ''}>{value.label || key} {value.status === 'unlocked' && value.region ? value.region : unlockText[value.status] || value.status}</Badge>
+      <span className="inline-flex"><LostMark value={value}><Badge variant={unlockVariants[value.status] || 'outline'} className={value.stale ? 'opacity-60' : ''}>{value.label || key} {value.status === 'unlocked' && value.region ? value.region : unlockText[value.status] || value.status}</Badge></LostMark></span>
     </Tooltip>)}
   </div>;
 }
@@ -278,11 +286,11 @@ function BackendsSection({ notify }) {
     if (backend.type === 'local' && backend.enabled && !confirm('停用本机 miaospeed？进程会被停止，重新启用后自动启动。')) return;
     patch(backend, { enabled: !backend.enabled });
   };
-  return <section className="border-b pb-8 pt-8">
+  return <section className="rounded-lg border bg-card p-6 shadow-sm">
     <div className="mb-2 flex items-center gap-2"><Cable className="size-4" /><h2 className="text-base font-semibold">miaospeed 后端</h2></div>
     <p className="mb-5 text-sm text-muted-foreground">深度测试在这些后端上运行。正向：填写已有 miaospeed 的地址和 token（例如给 Koipy 用的后端），可配置 mTLS；反向：在 NAT 后的机器上运行 miaospeed，主动连接主控 {data.reverseBase && <span className="font-mono text-xs">{data.reverseBase}</span>}。「启用」关闭后该后端不再被使用；「巡检」只控制是否参与定时巡检。</p>
-    <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[760px] text-sm">
-      <thead className="bg-muted/60 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-2.5 font-medium">名称</th><th className="px-4 py-2.5 font-medium">类型</th><th className="px-4 py-2.5 font-medium">状态</th><th className="px-4 py-2.5 font-medium">版本 / 地址</th><th className="px-4 py-2.5 font-medium">启用</th><th className="px-4 py-2.5 font-medium">巡检</th><th className="w-28 px-3 py-2.5"></th></tr></thead>
+    <div className="overflow-x-auto rounded-lg border bg-card shadow-sm"><table className="w-full min-w-[760px] text-sm">
+      <thead className="whitespace-nowrap bg-muted/50 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-2.5 font-medium">名称</th><th className="px-4 py-2.5 font-medium">类型</th><th className="px-4 py-2.5 font-medium">状态</th><th className="px-4 py-2.5 font-medium">版本 / 地址</th><th className="px-4 py-2.5 font-medium">启用</th><th className="px-4 py-2.5 font-medium">巡检</th><th className="px-4 py-2.5 text-right font-medium">操作</th></tr></thead>
       <tbody>{data.backends.length === 0 && <EmptyRow columns={7}>没有可用后端（本机 miaospeed 未安装）</EmptyRow>}{data.backends.map(backend => <tr key={backend.id} className="border-t">
         <td className="px-4 py-3"><div className="font-medium">{backend.name}</div><div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{backend.id}</div></td>
         <td className="px-4 py-3"><div className="flex flex-wrap gap-1"><Badge variant="outline">{backendTypeLabels[backend.type]}</Badge>{backend.mtls && <Tooltip content="出示客户端证书（mTLS）"><span><Badge variant="outline">mTLS</Badge></span></Tooltip>}{(backend.pinned || backend.customCa) && <Tooltip content={backend.pinned ? '固定证书指纹' : '自定义 CA'}><span><Badge variant="outline">{backend.pinned ? '指纹' : 'CA'}</Badge></span></Tooltip>}</div></td>
@@ -290,7 +298,7 @@ function BackendsSection({ notify }) {
         <td className="px-4 py-3 font-mono text-xs text-muted-foreground"><div>{backend.version || '-'}</div><div className="max-w-64 truncate">{backend.url || backend.remote || ''}</div></td>
         <td className="px-4 py-3"><Switch checked={backend.enabled} onCheckedChange={() => toggle(backend)} disabled={busy === backend.id} aria-label={`启用 ${backend.name}`} /></td>
         <td className="px-4 py-3"><Switch checked={backend.monitor !== false} onCheckedChange={() => patch(backend, { monitor: backend.monitor === false })} disabled={busy === backend.id || !backend.enabled} aria-label={`${backend.name} 参与定时巡检`} /></td>
-        <td className="px-3 py-3">{backend.type !== 'local' && <div className="flex justify-end gap-1">{backend.type === 'forward' && <Tooltip content="编辑（地址、token、TLS）"><Button size="icon" variant="ghost" onClick={() => setForward({ editing: backend })} disabled={Boolean(busy)}><Pencil /></Button></Tooltip>}{backend.type === 'reverse' && <Tooltip content="重置 token"><Button size="icon" variant="ghost" onClick={() => rotate(backend)} disabled={Boolean(busy)}><KeyRound /></Button></Tooltip>}<Tooltip content="删除"><Button size="icon" variant="ghost" onClick={() => remove(backend)} disabled={Boolean(busy)}><Trash2 /></Button></Tooltip></div>}</td>
+        <td className="px-3 py-3">{backend.type !== 'local' && <div className="flex justify-end gap-1">{backend.type === 'forward' && <Button size="sm" variant="ghost" onClick={() => setForward({ editing: backend })} disabled={Boolean(busy)}><Pencil />编辑</Button>}{backend.type === 'reverse' && <Button size="sm" variant="ghost" onClick={() => rotate(backend)} disabled={Boolean(busy)}><KeyRound />重置 token</Button>}<Button size="sm" variant="ghost" className="text-red-700 hover:text-red-800" onClick={() => remove(backend)} disabled={Boolean(busy)}><Trash2 />删除</Button></div>}</td>
       </tr>)}</tbody>
     </table></div>
     <div className="mt-4 flex flex-wrap gap-2"><Button variant="outline" onClick={() => setAdding(true)}><Plus />添加反向后端</Button><Button variant="outline" onClick={() => setForward({ editing: null })}><Plus />添加正向后端</Button></div>
@@ -360,8 +368,8 @@ function DeepTestView({ subscriptions, imports, notify }) {
   const reportUrl = item => `/api/deep-tests/${item.id}/report.png?t=${encodeURIComponent(item.finishedAt || '')}${sort ? `&sort=${sort}` : ''}`;
   const sources = [...subscriptions.map(item => ({ id: item.id, name: item.name })), ...imports.map(item => ({ id: item.id, name: item.name }))];
   const current = data.current;
-  return <div className="grid gap-6">
-    <section className="grid gap-4 rounded-md border p-4">
+  return <div className="grid grid-cols-[minmax(0,1fr)] gap-6">
+    <section className="grid gap-4 rounded-lg border bg-card p-5 shadow-sm">
       <div className="flex flex-wrap items-center gap-2">
         {Object.entries(data.presets).map(([key, label]) => { const Icon = presetIcons[key] || Zap; return <Button key={key} variant={preset === key ? 'default' : 'outline'} onClick={() => setPreset(key)} disabled={running}><Icon />{label}</Button>; })}
         <span className="ml-auto text-xs text-muted-foreground">{presetHints[preset] || ''}</span>
@@ -395,16 +403,16 @@ function DeepTestView({ subscriptions, imports, notify }) {
         <div><h2 className="text-base font-semibold">{shown.label} · {shown.backend.name}</h2><p className="mt-1 text-xs text-muted-foreground">{formatTime(shown.startedAt)} · {shown.nodeCount} 个节点 · {Math.round((shown.durationMs || 0) / 1000)}s{shown.status !== 'completed' ? ` · ${statusLabels[shown.status]} ${shown.completed}/${shown.total}` : ''}</p></div>
         <div className="flex gap-2">{shown.preset !== 'topology' && <Select value={sort} onChange={setSort} className="w-36"><option value="">订阅原序</option><option value="rtt">按延迟RTT</option><option value="http">按HTTP延迟</option>{shown.preset === 'speed' && <option value="speed">按平均速度</option>}</Select>}<Button asChild><a href={`${reportUrl(shown)}&download=1`} download><Download />下载 PNG</a></Button></div>
       </div>
-      <div className="overflow-auto rounded-md border bg-muted/20 p-2"><img key={reportUrl(shown)} src={reportUrl(shown)} alt={`${shown.label}报告`} className="mx-auto max-w-full" /></div>
+      <div className="overflow-auto rounded-lg border bg-card p-3 shadow-sm"><img key={reportUrl(shown)} src={reportUrl(shown)} alt={`${shown.label}报告`} className="mx-auto max-w-full" /></div>
     </section>}
     <section>
       <h2 className="mb-3 text-base font-semibold">测试记录</h2>
-      <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[640px] text-sm">
-        <thead className="bg-muted/60 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-2.5 font-medium">时间</th><th className="px-4 py-2.5 font-medium">类型</th><th className="px-4 py-2.5 font-medium">后端</th><th className="px-4 py-2.5 font-medium">节点</th><th className="px-4 py-2.5 font-medium">状态</th><th className="px-4 py-2.5 font-medium">耗时</th><th className="w-16 px-3 py-2.5"></th></tr></thead>
+      <div className="overflow-x-auto rounded-lg border bg-card shadow-sm"><table className="w-full min-w-[640px] text-sm">
+        <thead className="whitespace-nowrap bg-muted/50 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-2.5 font-medium">时间</th><th className="px-4 py-2.5 font-medium">类型</th><th className="px-4 py-2.5 font-medium">后端</th><th className="px-4 py-2.5 font-medium">节点</th><th className="px-4 py-2.5 font-medium">状态</th><th className="px-4 py-2.5 font-medium">耗时</th><th className="px-4 py-2.5 text-right font-medium">操作</th></tr></thead>
         <tbody>{data.history.length === 0 && <EmptyRow columns={7}>还没有测试记录</EmptyRow>}{data.history.map(item => <tr key={item.id} className={`cursor-pointer border-t hover:bg-muted/40 ${shown?.id === item.id ? 'bg-muted/50' : ''}`} onClick={() => setViewId(item.id)}>
           <td className="px-4 py-2.5 tabular-nums">{formatTime(item.startedAt)}</td><td className="px-4 py-2.5">{item.label}</td><td className="px-4 py-2.5">{item.backend.name}</td><td className="px-4 py-2.5 tabular-nums">{item.nodeCount}</td>
           <td className="px-4 py-2.5"><Badge variant={statusVariants[item.status] || 'outline'}>{statusLabels[item.status] || item.status}</Badge></td><td className="px-4 py-2.5 tabular-nums">{Math.round((item.durationMs || 0) / 1000)}s</td>
-          <td className="px-3 py-2.5" onClick={event => event.stopPropagation()}><Tooltip content="删除"><Button size="icon" variant="ghost" onClick={() => remove(item)}><Trash2 /></Button></Tooltip></td>
+          <td className="px-3 py-2.5 text-right" onClick={event => event.stopPropagation()}><Button size="sm" variant="ghost" className="text-red-700 hover:text-red-800" onClick={() => remove(item)}><Trash2 />删除</Button></td>
         </tr>)}</tbody>
       </table></div>
     </section>
@@ -417,10 +425,11 @@ function UnlockSection({ notify, onSaved }) {
   const [data, setData] = useState(null);
   const [chosen, setChosen] = useState([]);
   const [regional, setRegional] = useState(true);
+  const [scheduleHours, setScheduleHours] = useState(0);
   const [query, setQuery] = useState('');
   const [saving, setSaving] = useState(false);
   useEffect(() => {
-    api('/api/unlock').then(result => { setData(result); setChosen(result.settings.scripts); setRegional(result.settings.regional); }).catch(error => notify(error.message, true));
+    api('/api/unlock').then(result => { setData(result); setChosen(result.settings.scripts); setRegional(result.settings.regional); setScheduleHours(result.settings.scheduleHours || 0); }).catch(error => notify(error.message, true));
   }, []);
   if (!data) return null;
   const byId = new Map(data.scripts.map(item => [item.id, item]));
@@ -429,16 +438,44 @@ function UnlockSection({ notify, onSaved }) {
   const toggle = id => setChosen(current => (current.includes(id) ? current.filter(item => item !== id) : [...current, id]));
   const save = async () => {
     setSaving(true);
-    try { await api('/api/unlock', { method: 'PUT', body: JSON.stringify({ scripts: chosen, regional }) }); notify('解锁检测设置已保存'); await onSaved(); } catch (error) { notify(error.message, true); } finally { setSaving(false); }
+    try { await api('/api/unlock', { method: 'PUT', body: JSON.stringify({ scripts: chosen, regional, scheduleHours: Number(scheduleHours) || 0 }) }); notify('解锁检测设置已保存'); await onSaved(); } catch (error) { notify(error.message, true); } finally { setSaving(false); }
   };
-  return <section className="border-b pb-8 pt-8">
+  return <section className="rounded-lg border bg-card p-6 shadow-sm">
     <div className="mb-2 flex items-center gap-2"><Play className="size-4" /><h2 className="text-base font-semibold">解锁检测</h2></div>
     <p className="mb-5 text-sm text-muted-foreground">使用 miaospeed-scripts（{data.scripts.length} 个脚本）在 miaospeed 后端上检测。选中的脚本作为节点表的列，按选择顺序排列。</p>
     <div className="mb-3 flex flex-wrap gap-1.5">{chosen.map(id => <button key={id} type="button" onClick={() => toggle(id)} className="inline-flex items-center gap-1 rounded-md border bg-muted/50 px-2 py-1 text-xs hover:bg-muted">{byId.get(id)?.name || id}<X className="size-3" /></button>)}{chosen.length === 0 && <span className="text-xs text-muted-foreground">未选择，使用默认列</span>}</div>
     <div className="mb-3 flex flex-wrap items-center gap-3"><div className="relative min-w-56 flex-1 sm:max-w-sm"><Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input className="pl-9" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索服务、地区（如 hk、jp）或分类" /></div><label className="flex items-center gap-2 text-sm"><Switch checked={regional} onCheckedChange={setRegional} />按节点地区自动追加区域服务</label></div>
     <div className="grid max-h-72 gap-1 overflow-y-auto rounded-md border p-2 sm:grid-cols-2 lg:grid-cols-3">{matches.map(item => <label key={item.id} className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"><input type="checkbox" className="mt-0.5 size-4 accent-zinc-900" checked={chosen.includes(item.id)} onChange={() => toggle(item.id)} /><span className="min-w-0"><span className="font-medium">{item.name}</span><span className="ml-1.5 text-[11px] text-muted-foreground">{categoryLabels[item.category] || item.category} · {item.regions.join('/')}</span></span></label>)}</div>
+    <div className="mt-5 flex flex-wrap items-start justify-between gap-4 rounded-md border px-4 py-3">
+      <span className="grid gap-1"><span className="text-sm font-medium">定时检测</span><span className="text-xs text-muted-foreground">每隔设定的小时数在默认后端上检测全部节点（0 = 关闭）。解锁状态变差时在节点表里用红点标记，并写入「日志」。{data.settings.lastScheduledAt ? ` 上次定时检测：${formatTime(data.settings.lastScheduledAt)}` : ''}</span></span>
+      <label className="flex items-center gap-2 text-sm">每<Input type="number" min="0" max="720" className="w-20" value={scheduleHours} onChange={e => setScheduleHours(e.target.value)} />小时</label>
+    </div>
     <div className="mt-4 flex gap-2"><Button onClick={save} disabled={saving}>{saving ? <LoaderCircle className="animate-spin" /> : <Check />}保存解锁设置</Button><Button variant="outline" onClick={() => setChosen(data.defaults)}>恢复默认</Button></div>
   </section>;
+}
+
+const logCategories = { unlock: '解锁', node: '节点', subscription: '订阅', probe: '后端' };
+const logLevels = { info: 'bg-zinc-400', warning: 'bg-amber-500', error: 'bg-red-500' };
+
+function LogsView({ notify }) {
+  const [category, setCategory] = useState(() => readStored('nw-log-category', ''));
+  const [events, setEvents] = useState(null);
+  const load = async () => { try { setEvents((await api(`/api/events?limit=500${category ? `&category=${category}` : ''}`)).events); } catch (error) { notify(error.message, true); } };
+  useEffect(() => { load(); const timer = setInterval(load, 15000); return () => clearInterval(timer); }, [category]);
+  const choose = value => { setCategory(value); writeStored('nw-log-category', value); };
+  const clear = async () => { if (!confirm('清空全部日志？')) return; try { await api('/api/events', { method: 'DELETE' }); await load(); } catch (error) { notify(error.message, true); } };
+  return <div>
+    <PageHeader title="日志" description="解锁变化、节点离线 / 恢复、订阅拉取和后端连接记录，保留最近 2000 条。" actions={<><Button variant="outline" onClick={load}><RefreshCw />刷新</Button><Button variant="outline" className="text-red-700 hover:text-red-800" onClick={clear} disabled={!events?.length}><Trash2 />清空日志</Button></>} />
+    <div className="mb-3 flex flex-wrap gap-1.5">{[['', '全部'], ...Object.entries(logCategories)].map(([value, label]) => <Button key={value || 'all'} size="sm" variant={category === value ? 'default' : 'outline'} onClick={() => choose(value)}>{label}</Button>)}</div>
+    <div className="overflow-x-auto rounded-lg border bg-card shadow-sm"><table className="w-full min-w-[720px] text-sm">
+      <thead className="whitespace-nowrap bg-muted/50 text-left text-xs text-muted-foreground"><tr><th className="w-40 px-4 py-2.5 font-medium">时间</th><th className="w-20 px-4 py-2.5 font-medium">类别</th><th className="px-4 py-2.5 font-medium">事件</th></tr></thead>
+      <tbody>{events === null && <EmptyRow columns={3}><LoaderCircle className="mx-auto size-4 animate-spin" /></EmptyRow>}{events?.length === 0 && <EmptyRow columns={3}>暂无日志</EmptyRow>}{events?.map(item => <tr key={item.id} className="border-t align-top">
+        <td className="whitespace-nowrap px-4 py-3 tabular-nums text-muted-foreground">{formatTime(item.at)}</td>
+        <td className="px-4 py-3"><Badge variant="outline">{logCategories[item.category] || item.category}</Badge></td>
+        <td className="px-4 py-3"><div className="flex items-start gap-2"><span className={`mt-1.5 size-2 shrink-0 rounded-full ${logLevels[item.level] || logLevels.info}`} /><div className="min-w-0"><div className={item.level === 'error' ? 'text-red-700' : item.level === 'warning' ? 'text-amber-800' : ''}>{item.title}</div>{item.detail && <div className="mt-0.5 whitespace-pre-line text-xs text-muted-foreground">{item.detail}</div>}</div></div></td>
+      </tr>)}</tbody>
+    </table></div>
+  </div>;
 }
 
 function EmptyRow({ columns, children }) {
@@ -468,8 +505,8 @@ function LoginView({ onAuthenticated }) {
   };
 
   return <div className="flex min-h-screen items-center justify-center px-5 py-10">
-    <main className="w-full max-w-sm">
-      <div className="mb-10 flex items-center gap-3">
+    <main className="w-full max-w-sm rounded-lg border bg-card p-8 shadow-sm">
+      <div className="mb-8 flex items-center gap-3">
         <div className="flex size-11 items-center justify-center rounded-md bg-foreground text-background"><Activity className="size-6" /></div>
         <div><h1 className="text-xl font-semibold">Node Watcher</h1><p className="mt-0.5 text-sm text-muted-foreground">节点监控控制台</p></div>
       </div>
@@ -491,9 +528,9 @@ function NodeState({ online }) {
 
 function NodeTable({ nodes, columns, selected, onSelect, onDelete }) {
   const multiProbe = nodes.some(item => item.probes?.length > 1);
-  return <div className="overflow-x-auto rounded-md border">
+  return <div className="overflow-x-auto rounded-lg border bg-card shadow-sm">
     <table className="w-full min-w-[1200px] border-collapse text-sm">
-      <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
+      <thead className="whitespace-nowrap bg-muted/50 text-left text-xs text-muted-foreground">
         <tr>
           <th className="w-10 px-3 py-2.5"></th>
           <th className="min-w-56 px-3 py-2.5 font-medium">节点</th>
@@ -505,18 +542,18 @@ function NodeTable({ nodes, columns, selected, onSelect, onDelete }) {
           {multiProbe && <th className="w-28 px-3 py-2.5 font-medium"><Tooltip content={`圆点依次为：${(nodes.find(item => item.probes?.length)?.probes || []).map(probe => probe.name).join('、')}`}><span className="cursor-help underline decoration-dotted underline-offset-4">各探针</span></Tooltip></th>}
           {columns.map(column => <th key={column.id} className="w-28 px-3 py-2.5 text-center font-medium">{column.label}</th>)}
           <th className="min-w-48 px-3 py-2.5 font-medium">区域服务</th>
-          <th className="w-12 px-3 py-2.5"></th>
+          <th className="w-16 px-3 py-2.5"></th>
         </tr>
       </thead>
       <tbody>
         {nodes.length === 0 && <EmptyRow columns={columns.length + (multiProbe ? 10 : 9)}>没有符合条件的节点</EmptyRow>}
-        {nodes.map(status => <tr key={status.node.id} className="border-t hover:bg-muted/35">
+        {nodes.map(status => <tr key={status.node.id} className={`border-t hover:bg-muted/35 ${status.node.retired ? 'text-muted-foreground' : ''}`}>
           <td className="px-3 py-2.5"><input type="checkbox" className="size-4 accent-zinc-900" checked={selected.has(status.node.id)} onChange={() => onSelect(status.node.id)} aria-label={`选择 ${status.node.name}`} /></td>
           <td className="max-w-72 px-3 py-2.5">
             <div className="truncate font-medium" title={status.node.name}>{status.node.name}</div>
             <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{status.node.server}:{status.node.port}</div>
           </td>
-          <td className="whitespace-nowrap px-3 py-2.5"><NodeState online={status.online} /></td>
+          <td className="whitespace-nowrap px-3 py-2.5">{status.node.retired ? <Tooltip content="订阅更新后已不包含这个节点，不再检测；显示的是最后一次结果。可在设置中开启自动删除。"><span><Badge variant="outline">已不在订阅中</Badge></span></Tooltip> : <NodeState online={status.online} />}</td>
           <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs tabular-nums">{status.online ? <Tooltip content="HTTP 延迟（含建连）/ 延迟 RTT"><span>{status.responseTime} ms{status.rtt ? <span className="ml-1 text-muted-foreground">/ {status.rtt}</span> : null}</span></Tooltip> : '-'}</td>
           <td className="max-w-40 truncate px-3 py-2.5 text-muted-foreground" title={status.node.subscription}>{status.node.subscription}</td>
           <td className="px-3 py-2.5"><Badge variant="outline">{String(status.node.protocol).toUpperCase()}</Badge></td>
@@ -524,30 +561,36 @@ function NodeTable({ nodes, columns, selected, onSelect, onDelete }) {
           {multiProbe && <td className="px-3 py-2.5"><ProbeDots probes={status.probes} /></td>}
           {columns.map(column => <td key={column.id} className="px-3 py-2.5 text-center"><ServiceState value={status.media?.services?.[column.id]} /></td>)}
           <td className="px-3 py-2.5"><RegionalServices services={status.media?.services} /></td>
-          <td className="px-3 py-2.5"><Tooltip content="排除节点"><Button size="icon" variant="ghost" onClick={() => onDelete(status.node)}><Trash2 /></Button></Tooltip></td>
+          <td className="px-3 py-2.5 text-right"><Tooltip content="从列表中移除，之后不再检测（订阅里重新出现也不会加回）"><Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => onDelete(status.node)}>排除</Button></Tooltip></td>
         </tr>)}
       </tbody>
     </table>
   </div>;
 }
 
-function AddSubscriptionDialog({ onAdded }) {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState('');
-  const [url, setUrl] = useState('');
+// Add (subscription = null) or edit a subscription. Empty refresh interval follows the global setting.
+function SubscriptionDialog({ open, subscription, globalRefresh, onClose, onSaved, notify }) {
+  const [form, setForm] = useState({ name: '', url: '', refreshMinutes: '' });
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (open) setForm({ name: subscription?.name || '', url: subscription?.url || '', refreshMinutes: subscription?.refreshMinutes ?? '' });
+  }, [open, subscription?.id]);
   const submit = async event => {
     event.preventDefault(); setBusy(true);
-    try { await api('/api/subscriptions', { method: 'POST', body: JSON.stringify({ name, url }) }); setOpen(false); setName(''); setUrl(''); await onAdded(); }
+    const body = JSON.stringify({ name: form.name, url: form.url, refreshMinutes: form.refreshMinutes === '' ? null : Number(form.refreshMinutes) });
+    try {
+      await api(subscription ? `/api/subscriptions/${subscription.id}` : '/api/subscriptions', { method: subscription ? 'PATCH' : 'POST', body });
+      onClose(); await onSaved(); notify(subscription ? '订阅已保存' : '订阅已添加');
+    } catch (error) { notify(error.message, true); }
     finally { setBusy(false); }
   };
-  return <Dialog open={open} onOpenChange={setOpen}>
-    <DialogTrigger asChild><Button><Plus />添加订阅</Button></DialogTrigger>
+  return <Dialog open={open} onOpenChange={value => { if (!value) onClose(); }}>
     <DialogContent><form onSubmit={submit} className="grid gap-5">
-      <DialogHeader><DialogTitle>添加订阅</DialogTitle><DialogDescription>支持 Clash YAML 与 Base64 通用订阅。</DialogDescription></DialogHeader>
-      <label className="grid gap-2 text-sm font-medium">名称<Input value={name} onChange={event => setName(event.target.value)} required /></label>
-      <label className="grid gap-2 text-sm font-medium">订阅 URL<Input type="url" value={url} onChange={event => setUrl(event.target.value)} required /></label>
-      <DialogFooter><Button type="button" variant="outline" onClick={() => setOpen(false)}>取消</Button><Button disabled={busy}>{busy && <LoaderCircle className="animate-spin" />}保存</Button></DialogFooter>
+      <DialogHeader><DialogTitle>{subscription ? '编辑订阅' : '添加订阅'}</DialogTitle><DialogDescription>支持 Clash YAML 与 Base64 通用订阅。</DialogDescription></DialogHeader>
+      <label className="grid gap-2 text-sm font-medium">名称<Input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} required /></label>
+      <label className="grid gap-2 text-sm font-medium">订阅 URL<Input type="url" value={form.url} onChange={event => setForm({ ...form, url: event.target.value })} required /></label>
+      <label className="grid gap-2 text-sm font-medium">自动刷新间隔（分钟）<Input type="number" min="0" max="10080" step="1" value={form.refreshMinutes} onChange={event => setForm({ ...form, refreshMinutes: event.target.value })} placeholder={`留空跟随全局设置（${globalRefresh} 分钟）`} /><span className="text-xs font-normal text-muted-foreground">留空跟随设置页的全局间隔；填 0 表示不自动刷新，只手动刷新。</span></label>
+      <DialogFooter><Button type="button" variant="outline" onClick={onClose}>取消</Button><Button disabled={busy}>{busy ? <LoaderCircle className="animate-spin" /> : <Check />}{subscription ? '保存' : '添加'}</Button></DialogFooter>
     </form></DialogContent>
   </Dialog>;
 }
@@ -572,24 +615,55 @@ function ImportDialog({ onAdded }) {
   </Dialog>;
 }
 
-function SourcesView({ subscriptions, imports, sourceStatus, reload, notify }) {
+function refreshLabel(item, globalRefresh) {
+  if (item.refreshMinutes === 0) return '仅手动';
+  if (item.refreshMinutes == null) return `每 ${globalRefresh} 分钟（全局）`;
+  return `每 ${item.refreshMinutes} 分钟`;
+}
+
+function SourcesView({ subscriptions, imports, sourceStatus, globalRefresh, reload, notify }) {
   const statusById = new Map(sourceStatus.map(item => [item.id, item]));
+  const [busy, setBusy] = useState('');
+  const [dialog, setDialog] = useState(null);
   const toggle = async item => { try { await api(`/api/subscriptions/${item.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: item.enabled === false }) }); await reload(); } catch (error) { notify(error.message, true); } };
   const removeSubscription = async item => { if (!confirm(`删除订阅“${item.name}”？`)) return; try { await api(`/api/subscriptions/${item.id}`, { method: 'DELETE' }); await reload(); } catch (error) { notify(error.message, true); } };
   const removeImport = async item => { if (!confirm(`删除导入“${item.name}”？`)) return; try { await api(`/api/imports/${item.id}`, { method: 'DELETE' }); await reload(); } catch (error) { notify(error.message, true); } };
+  const refresh = async item => {
+    setBusy(item.id);
+    try { const data = await api(`/api/subscriptions/${item.id}/refresh`, { method: 'POST', body: '{}' }); notify(`“${item.name}”已刷新，${data.status?.nodeCount ?? 0} 个节点`); }
+    catch (error) { notify(`“${item.name}”刷新失败：${error.message}`, true); }
+    finally { setBusy(''); await reload().catch(() => {}); }
+  };
+  const refreshAll = async () => {
+    setBusy('all');
+    try { await api('/api/nodes/reload', { method: 'POST', body: '{}' }); notify('全部来源已刷新'); }
+    catch (error) { notify(error.message, true); }
+    finally { setBusy(''); await reload().catch(() => {}); }
+  };
   const rows = [...subscriptions.map(item => ({ ...item, kind: '订阅' })), ...imports.map(item => ({ ...item, kind: '导入' }))];
   return <div>
-    <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-base font-semibold">节点来源</h2><p className="mt-1 text-sm text-muted-foreground">{rows.length} 个来源</p></div><div className="flex gap-2"><ImportDialog onAdded={reload} /><AddSubscriptionDialog onAdded={reload} /></div></div>
-    <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[760px] text-sm">
-      <thead className="bg-muted/60 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-2.5 font-medium">名称</th><th className="px-4 py-2.5 font-medium">类型</th><th className="px-4 py-2.5 font-medium">节点</th><th className="px-4 py-2.5 font-medium">拉取状态</th><th className="px-4 py-2.5 font-medium">启用</th><th className="w-12 px-3 py-2.5"></th></tr></thead>
-      <tbody>{rows.length === 0 && <EmptyRow columns={6}>尚未添加节点来源</EmptyRow>}{rows.map(item => { const health = statusById.get(item.id); return <tr key={item.id} className="border-t hover:bg-muted/35">
-        <td className="px-4 py-3"><div className="font-medium">{item.name}</div>{item.url && <div className="mt-0.5 max-w-md truncate text-xs text-muted-foreground">{item.url}</div>}</td>
-        <td className="px-4 py-3"><Badge variant="outline">{item.kind}</Badge></td><td className="px-4 py-3 tabular-nums">{health?.nodeCount ?? item.nodeCount ?? '-'}</td>
-        <td className="px-4 py-3">{health ? <Badge variant={health.ok ? 'success' : 'danger'}>{health.ok ? '正常' : health.error || '失败'}</Badge> : <span className="text-muted-foreground">待加载</span>}</td>
-        <td className="px-4 py-3">{item.kind === '订阅' ? <Switch checked={item.enabled !== false} onCheckedChange={() => toggle(item)} aria-label="切换订阅" /> : <span className="text-muted-foreground">-</span>}</td>
-        <td className="px-3 py-3"><Tooltip content="删除"><Button size="icon" variant="ghost" onClick={() => item.kind === '订阅' ? removeSubscription(item) : removeImport(item)}><Trash2 /></Button></Tooltip></td>
+    <PageHeader title="来源" description={`${rows.length} 个来源 · 订阅默认每 ${globalRefresh} 分钟自动刷新，可在每个订阅里单独设置`} actions={<>
+      <Button variant="outline" onClick={refreshAll} disabled={Boolean(busy) || subscriptions.length === 0}>{busy === 'all' ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}全部刷新</Button>
+      <ImportDialog onAdded={reload} />
+      <Button onClick={() => setDialog({ subscription: null })}><Plus />添加订阅</Button>
+    </>} />
+    <div className="overflow-x-auto rounded-lg border bg-card shadow-sm"><table className="w-full min-w-[900px] text-sm">
+      <thead className="whitespace-nowrap bg-muted/50 text-left text-xs text-muted-foreground"><tr><th className="px-3 py-2.5 font-medium">名称</th><th className="px-3 py-2.5 font-medium">类型</th><th className="px-3 py-2.5 font-medium">节点</th><th className="px-3 py-2.5 font-medium">拉取状态</th><th className="px-3 py-2.5 font-medium">上次更新</th><th className="px-3 py-2.5 font-medium">自动刷新</th><th className="px-3 py-2.5 font-medium">启用</th><th className="px-3 py-2.5 text-right font-medium">操作</th></tr></thead>
+      <tbody>{rows.length === 0 && <EmptyRow columns={8}>尚未添加节点来源</EmptyRow>}{rows.map(item => { const health = statusById.get(item.id); const isSub = item.kind === '订阅'; return <tr key={item.id} className="border-t hover:bg-muted/35">
+        <td className="px-3 py-3"><div className="font-medium">{item.name}</div>{item.url && <div className="mt-0.5 max-w-52 truncate text-xs text-muted-foreground" title={item.url}>{item.url}</div>}</td>
+        <td className="px-3 py-3"><Badge variant="outline">{item.kind}</Badge></td><td className="px-3 py-3 tabular-nums">{health?.nodeCount ?? item.nodeCount ?? '-'}{health?.retiredCount ? <div className="whitespace-nowrap text-xs text-muted-foreground">另 {health.retiredCount} 个已移除</div> : null}</td>
+        <td className="px-3 py-3">{health ? <Tooltip content={health.ok ? '最近一次拉取成功' : `${health.error || '失败'}${health.stale ? '\n沿用上次成功拉取的节点' : ''}`}><span className="inline-flex"><Badge variant={health.ok ? 'success' : 'danger'} className="max-w-32 truncate">{health.ok ? '正常' : health.stale ? '失败，沿用旧节点' : health.error || '失败'}</Badge></span></Tooltip> : <span className="text-muted-foreground">{isSub && item.enabled === false ? '已停用' : '待加载'}</span>}</td>
+        <td className="whitespace-nowrap px-3 py-3 tabular-nums text-muted-foreground">{isSub ? formatTime(health?.lastSuccessAt) : '-'}</td>
+        <td className="whitespace-nowrap px-3 py-3">{isSub ? <><div>{refreshLabel(item, globalRefresh)}</div>{health?.nextRefreshAt && item.enabled !== false && <div className="mt-0.5 text-xs tabular-nums text-muted-foreground">下次 {formatTime(health.nextRefreshAt)}</div>}</> : <span className="text-muted-foreground">-</span>}</td>
+        <td className="px-3 py-3">{isSub ? <Switch checked={item.enabled !== false} onCheckedChange={() => toggle(item)} aria-label="切换订阅" /> : <span className="text-muted-foreground">-</span>}</td>
+        <td className="px-3 py-3"><div className="flex justify-end gap-1">
+          {isSub && <Button size="sm" variant="outline" onClick={() => refresh(item)} disabled={Boolean(busy) || item.enabled === false}>{busy === item.id ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}刷新</Button>}
+          {isSub && <Button size="sm" variant="ghost" onClick={() => setDialog({ subscription: item })}><Pencil />编辑</Button>}
+          <Button size="sm" variant="ghost" className="text-red-700 hover:text-red-800" onClick={() => isSub ? removeSubscription(item) : removeImport(item)}><Trash2 />删除</Button>
+        </div></td>
       </tr>; })}</tbody>
     </table></div>
+    <SubscriptionDialog open={Boolean(dialog)} subscription={dialog?.subscription || null} globalRefresh={globalRefresh} onClose={() => setDialog(null)} onSaved={reload} notify={notify} />
   </div>;
 }
 
@@ -601,7 +675,7 @@ function ChannelHeader({ icon: Icon, name, detail, enabled, onEnabledChange }) {
 }
 
 function SettingsView({ config, notifications, onSaved, notify }) {
-  const defaultMonitoring = { checkIntervalMinutes: 5, timeoutSeconds: 10, retryAttempts: 1, failureThreshold: 2, subscriptionRefreshMinutes: 30, customHealthCheckUrl: '' };
+  const defaultMonitoring = { checkIntervalMinutes: 5, timeoutSeconds: 10, retryAttempts: 1, failureThreshold: 2, subscriptionRefreshMinutes: 30, pruneRemovedNodes: false, customHealthCheckUrl: '' };
   const [monitoringForm, setMonitoringForm] = useState(config || defaultMonitoring);
   const [channels, setChannels] = useState({
     bark: { enabled: false, url: '' },
@@ -657,15 +731,17 @@ function SettingsView({ config, notifications, onSaved, notify }) {
     finally { setSaving(''); }
   };
 
-  return <div className="max-w-3xl">
-    <form onSubmit={saveMonitoring} className="border-b pb-8">
-      <div className="mb-5"><h2 className="text-base font-semibold">检测设置</h2><p className="mt-1 text-sm text-muted-foreground">节点状态变化由周期检测触发。</p></div>
+  return <div className="grid max-w-4xl grid-cols-[minmax(0,1fr)] gap-6">
+    <form onSubmit={saveMonitoring} className="rounded-lg border bg-card p-6 shadow-sm">
+      <div className="mb-2 flex items-center gap-2"><Timer className="size-4" /><h2 className="text-base font-semibold">检测与订阅</h2></div>
+      <p className="mb-5 text-sm text-muted-foreground">节点状态变化由周期检测触发；订阅按间隔自动重新拉取。</p>
       <div className="grid gap-5 sm:grid-cols-3">
         <label className="grid gap-2 text-sm font-medium">周期（分钟）<Input type="number" min="1" value={monitoringForm.checkIntervalMinutes ?? 5} onChange={e => setMonitoringForm({ ...monitoringForm, checkIntervalMinutes: Number(e.target.value) })} /></label>
         <label className="grid gap-2 text-sm font-medium">超时（秒，最多 10）<Input type="number" min="1" max="10" value={monitoringForm.timeoutSeconds ?? 10} onChange={e => setMonitoringForm({ ...monitoringForm, timeoutSeconds: Number(e.target.value) })} /></label>
         <label className="grid gap-2 text-sm font-medium">失败重试（次，0-3）<Input type="number" min="0" max="3" value={monitoringForm.retryAttempts ?? 1} onChange={e => setMonitoringForm({ ...monitoringForm, retryAttempts: Number(e.target.value) })} /></label>
         <label className="grid gap-2 text-sm font-medium">连续失败多少次才告警<Input type="number" min="1" max="10" value={monitoringForm.failureThreshold ?? 2} onChange={e => setMonitoringForm({ ...monitoringForm, failureThreshold: Number(e.target.value) })} /></label>
-        <label className="grid gap-2 text-sm font-medium">订阅刷新（分钟）<Input type="number" min="1" value={monitoringForm.subscriptionRefreshMinutes ?? 30} onChange={e => setMonitoringForm({ ...monitoringForm, subscriptionRefreshMinutes: Number(e.target.value) })} /></label>
+        <label className="grid gap-2 text-sm font-medium">订阅自动刷新（分钟）<Input type="number" min="1" value={monitoringForm.subscriptionRefreshMinutes ?? 30} onChange={e => setMonitoringForm({ ...monitoringForm, subscriptionRefreshMinutes: Number(e.target.value) })} /></label>
+        <label className="flex items-start justify-between gap-4 rounded-md border px-4 py-3 sm:col-span-3"><span className="grid gap-1"><span className="text-sm font-medium">订阅更新后自动删除已不存在的节点</span><span className="text-xs text-muted-foreground">关闭时，订阅里消失的节点保留在列表中并标记“已不在订阅中”，不再检测、不发告警。</span></span><Switch checked={monitoringForm.pruneRemovedNodes === true} onCheckedChange={value => setMonitoringForm({ ...monitoringForm, pruneRemovedNodes: value })} aria-label="订阅更新后自动删除已不存在的节点" /></label>
         <label className="grid gap-2 text-sm font-medium sm:col-span-3">探测地址（留空使用默认 gstatic generate_204）<Input type="url" placeholder="https://www.gstatic.com/generate_204" value={monitoringForm.customHealthCheckUrl ?? ''} onChange={e => setMonitoringForm({ ...monitoringForm, customHealthCheckUrl: e.target.value })} /></label>
       </div>
       <Button className="mt-6" type="submit" disabled={Boolean(saving)}>{saving === 'monitoring' ? <LoaderCircle className="animate-spin" /> : <Check />}保存检测设置</Button>
@@ -674,9 +750,9 @@ function SettingsView({ config, notifications, onSaved, notify }) {
     <BackendsSection notify={notify} />
     <UnlockSection notify={notify} onSaved={onSaved} />
 
-    <section className="pt-8">
+    <section className="rounded-lg border bg-card px-6 pt-6 shadow-sm">
       <div className="mb-2 flex items-center gap-2"><Bell className="size-4" /><h2 className="text-base font-semibold">状态告警</h2></div>
-      <div className="divide-y border-y">
+      <div className="divide-y border-t">
         <div className="py-6">
           <ChannelHeader icon={Smartphone} name="Bark" detail={channels.bark.urlConfigured ? '推送地址已配置' : 'iPhone 推送'} enabled={channels.bark.enabled} onEnabledChange={enabled => updateChannel('bark', { enabled })} />
           <div className="mt-5 grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end"><label className="grid gap-2 text-sm font-medium">推送地址<Input type="password" autoComplete="off" value={channels.bark.url} onChange={e => updateChannel('bark', { url: e.target.value })} placeholder={channels.bark.urlConfigured ? '已配置，留空则保留' : 'https://api.day.app/你的Key'} /></label><div className="flex gap-2"><Button variant="outline" onClick={() => saveChannel('bark')} disabled={Boolean(saving)}>保存</Button><Button onClick={() => saveChannel('bark', true)} disabled={Boolean(saving) || !channels.bark.enabled}>{saving === 'bark' ? <LoaderCircle className="animate-spin" /> : <Send />}保存并测试</Button></div></div>
@@ -720,6 +796,7 @@ function App() {
   const [sourceFilter, setSourceFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [busy, setBusy] = useState('');
+  const [view, setView] = useState(() => (VIEWS.some(item => item.id === readStored('nw-view', '')) ? readStored('nw-view', '') : 'nodes'));
   const [message, setMessage] = useState(null);
   const [reportKey, setReportKey] = useState(Date.now());
   const [probes, setProbes] = useState([]);
@@ -728,6 +805,7 @@ function App() {
 
   const notify = (text, error = false) => { setMessage({ text, error }); setTimeout(() => setMessage(null), 3500); };
   const chooseProbe = id => { setProbeId(id); writeStored('nw-probe', id); };
+  const chooseView = id => { setView(id); writeStored('nw-view', id); window.scrollTo(0, 0); };
   const load = async (probe = probeId) => {
     const nodeRequest = api(`/api/nodes/public${probe ? `?probe=${encodeURIComponent(probe)}` : ''}`).catch(error => {
       if (error.status === 404 && probe) { chooseProbe(''); return api('/api/nodes/public'); }
@@ -772,17 +850,19 @@ function App() {
     return (!query || `${item.node.name} ${item.node.server} ${item.node.protocol}`.toLowerCase().includes(query))
       && (sourceFilter === 'all' || item.node.subscription === sourceFilter)
       && (statusFilter === 'all'
-        || (statusFilter === 'online' && item.online === true)
-        || (statusFilter === 'offline' && item.online === false)
-        || (statusFilter === 'pending' && item.online == null));
+        || (statusFilter === 'retired' && item.node.retired)
+        || (statusFilter === 'lost' && Object.values(item.media?.services || {}).some(value => value?.lostSince))
+        || (!item.node.retired && ((statusFilter === 'online' && item.online === true)
+          || (statusFilter === 'offline' && item.online === false)
+          || (statusFilter === 'pending' && item.online == null))));
   }), [nodes, search, sourceFilter, statusFilter]);
   const mediaJob = system.jobs?.media;
   const lastCheck = nodes.map(item => item.lastCheck).filter(Boolean).sort().at(-1);
+  const lostCount = nodes.filter(item => Object.values(item.media?.services || {}).some(value => value?.lostSince)).length;
   const avgLatency = nodes.filter(item => item.online && item.responseTime).reduce((sum, item, _, all) => sum + item.responseTime / all.length, 0);
 
   const healthCheck = async () => { setBusy('health'); try { await api('/api/nodes/check', { method: 'POST', body: '{}' }); await load(); notify('连通性检测完成'); } catch (error) { notify(error.message, true); } finally { setBusy(''); } };
   const mediaCheck = async () => { setBusy('media'); try { await api('/api/nodes/media-check', { method: 'POST', body: JSON.stringify({ nodeIds: [...selected], probeId: activeProbe?.id || null }) }); await load(); notify(selected.size ? `已提交 ${selected.size} 个节点` : '已提交全部节点'); } catch (error) { notify(error.message, true); } finally { setBusy(''); } };
-  const reload = async () => { setBusy('reload'); try { await api('/api/nodes/reload', { method: 'POST', body: '{}' }); await load(); notify('来源已重新加载'); } catch (error) { notify(error.message, true); } finally { setBusy(''); } };
   const exclude = async node => { if (!confirm(`排除节点“${node.name}”？`)) return; try { await api(`/api/nodes/${node.id}`, { method: 'DELETE' }); await load(); } catch (error) { notify(error.message, true); } };
   const select = id => setSelected(current => { const next = new Set(current); next.has(id) ? next.delete(id) : next.add(id); return next; });
   const logout = async () => {
@@ -795,49 +875,103 @@ function App() {
   if (auth.loading) return <div className="flex min-h-screen items-center justify-center"><LoaderCircle className="size-6 animate-spin text-muted-foreground" /></div>;
   if (!auth.authenticated) return <LoginView onAuthenticated={username => setAuth(current => ({ ...current, authenticated: true, username }))} />;
 
-  return <TooltipProvider><div className="min-h-screen">
-    <header className="border-b bg-background"><div className="mx-auto flex h-16 max-w-[1600px] items-center justify-between gap-4 px-4 sm:px-6">
-      <div className="flex min-w-0 items-center gap-3"><div className="flex size-9 items-center justify-center rounded-md border bg-foreground text-background"><Activity className="size-5" /></div><div className="min-w-0"><h1 className="truncate text-sm font-semibold">Node Watcher</h1>{(() => {
-        const current = probes.find(item => item.id === activeProbe?.id) || probes[0];
-        const ok = Boolean(current?.online);
-        const label = current ? `${probes.length > 1 ? `${current.name} · ` : ''}miaospeed ${ok ? '在线' : '离线'}${current.version ? ` ${current.version}` : ''}` : 'miaospeed 未配置';
-        return <div className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className={`size-1.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-red-500'}`} />{label}</div>;
-      })()}</div></div>
-      <div className="flex items-center gap-2">
-        <Tooltip content="重新拉取来源"><Button size="icon" variant="outline" aria-label="重新拉取来源" onClick={reload} disabled={Boolean(busy)}>{busy === 'reload' ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}</Button></Tooltip>
-        <Button variant="outline" onClick={healthCheck} disabled={Boolean(busy)}>{busy === 'health' ? <LoaderCircle className="animate-spin" /> : <Gauge />}<span className="hidden sm:inline">检测延迟</span></Button>
-        <Button onClick={mediaCheck} disabled={Boolean(busy) || mediaJob?.status === 'running'}>{mediaJob?.status === 'running' ? <LoaderCircle className="animate-spin" /> : <Play />}<span className="hidden sm:inline">解锁检测</span>{selected.size > 0 && <Badge className="bg-zinc-700 text-white ring-0">{selected.size}</Badge>}</Button>
-        {auth.authEnabled && <Tooltip content={`退出 ${auth.username || ''}`}><Button size="icon" variant="ghost" aria-label="退出登录" onClick={logout}><LogOut /></Button></Tooltip>}
-      </div>
-    </div></header>
-    <main className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6">
-      {message && <div className={`fixed right-4 top-20 z-50 flex max-w-sm items-center gap-2 rounded-md border px-4 py-3 text-sm shadow-lg ${message.error ? 'border-red-200 bg-red-50 text-red-800' : 'bg-background'}`}>{message.error ? <X className="size-4" /> : <Check className="size-4 text-emerald-600" />}{message.text}</div>}
-      <section className="mb-6 grid grid-cols-2 border-b sm:flex sm:divide-x [&>*:nth-child(odd)]:border-r sm:[&>*:nth-child(odd)]:border-r-0">
+  const current = VIEWS.find(item => item.id === view) || VIEWS[0];
+  const mediaRunning = mediaJob?.status === 'running';
+  const pages = {
+    nodes: <>
+      <PageHeader title="节点" description={`${summary.total} 个节点${summary.retired ? `，另有 ${summary.retired} 个已不在订阅中` : ''} · 最近检测 ${formatTime(lastCheck)}`} actions={<>
+        <Button variant="outline" onClick={healthCheck} disabled={Boolean(busy)}>{busy === 'health' ? <LoaderCircle className="animate-spin" /> : <Gauge />}检测延迟</Button>
+        <Button onClick={mediaCheck} disabled={Boolean(busy) || mediaRunning}>{mediaRunning ? <LoaderCircle className="animate-spin" /> : <Play />}{selected.size > 0 ? `检测选中的 ${selected.size} 个节点解锁` : '检测全部节点解锁'}</Button>
+      </>} />
+      <section className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Metric label="全部节点" value={summary.total} detail={`${sources.length} 个来源`} />
         <Metric label="在线" value={summary.online} detail={summary.total ? `${Math.round(summary.online / summary.total * 100)}% 可用` : '-'} tone="text-emerald-700" />
         <Metric label="离线" value={summary.offline} detail={summary.pending ? `${summary.pending} 个待检测` : '最近一轮检测'} tone={summary.offline ? 'text-red-700' : ''} />
-        <Metric label="平均延迟" value={avgLatency ? `${Math.round(avgLatency)} ms` : '-'} detail={formatTime(lastCheck)} />
+        <Metric label="平均延迟" value={avgLatency ? `${Math.round(avgLatency)} ms` : '-'} detail="HTTP 延迟（含建连）" />
       </section>
-      {mediaJob?.status === 'running' && <div className="mb-5 rounded-md border bg-muted/40 p-3"><div className="flex items-center justify-between text-sm"><span className="flex min-w-0 items-center gap-2"><LoaderCircle className="size-4 shrink-0 animate-spin" /><span className="truncate">{probes.length > 1 && mediaJob.probeId ? `${probes.find(item => item.id === mediaJob.probeId)?.name || mediaJob.probeId} · ` : ''}正在检测 {mediaJob.currentNode || '节点'}</span></span><span className="ml-4 shrink-0 font-mono text-xs">{mediaJob.completed}/{mediaJob.total}</span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200"><div className="h-full bg-zinc-800 transition-all" style={{ width: `${mediaJob.total ? mediaJob.completed / mediaJob.total * 100 : 0}%` }} /></div></div>}
-      <Tabs defaultValue="nodes">
-        <TabsList><TabsTrigger value="nodes"><Server className="mr-1.5 size-3.5" />节点</TabsTrigger><TabsTrigger value="sources"><Globe2 className="mr-1.5 size-3.5" />来源</TabsTrigger><TabsTrigger value="deep"><Zap className="mr-1.5 size-3.5" />深度测试</TabsTrigger><TabsTrigger value="report"><FileImage className="mr-1.5 size-3.5" />报告</TabsTrigger><TabsTrigger value="settings"><Settings2 className="mr-1.5 size-3.5" />设置</TabsTrigger></TabsList>
-        <TabsContent value="nodes">
-          <div className="mb-4 flex flex-wrap items-center gap-2">
-            {probes.length > 1 && <div className="relative"><select aria-label="探针" className="h-9 min-w-36 appearance-none rounded-md border bg-background pl-3 pr-8 text-sm font-medium outline-none focus:ring-2 focus:ring-ring" value={activeProbe?.id || ''} onChange={e => { chooseProbe(e.target.value); setSelected(new Set()); }}>{probes.filter(item => item.enabled).map(item => <option key={item.id} value={item.id}>{item.name}{!item.online ? '（离线）' : ''}</option>)}</select><ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 size-4 text-muted-foreground" /></div>}
-            <div className="relative min-w-56 flex-1 sm:max-w-sm"><Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input className="pl-9" value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索节点、地址或协议" /></div>
-            <div className="relative"><select className="h-9 min-w-36 appearance-none rounded-md border bg-background pl-3 pr-8 text-sm outline-none focus:ring-2 focus:ring-ring" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}><option value="all">全部来源</option>{sources.map(source => <option key={source}>{source}</option>)}</select><ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 size-4 text-muted-foreground" /></div>
-            <div className="relative"><select className="h-9 appearance-none rounded-md border bg-background pl-3 pr-8 text-sm outline-none focus:ring-2 focus:ring-ring" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option value="all">全部状态</option><option value="online">在线</option><option value="offline">离线</option><option value="pending">待检测</option></select><ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 size-4 text-muted-foreground" /></div>
-            <span className="ml-auto text-xs text-muted-foreground">显示 {filtered.length} / {nodes.length}</span>
-          </div>
-          <NodeTable nodes={filtered} columns={system.unlock?.columns || []} selected={selected} onSelect={select} onDelete={exclude} />
-        </TabsContent>
-        <TabsContent value="sources"><SourcesView subscriptions={subscriptions} imports={imports} sourceStatus={system.sourceStatus || []} reload={load} notify={notify} /></TabsContent>
-        <TabsContent value="deep"><DeepTestView subscriptions={subscriptions} imports={imports} notify={notify} /></TabsContent>
-        <TabsContent value="report"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-base font-semibold">检测报告</h2><p className="mt-1 text-sm text-muted-foreground">当前节点矩阵</p></div><div className="flex gap-2"><Button variant="outline" onClick={() => setReportKey(Date.now())}><RefreshCw />刷新</Button><Button asChild><a href={`/api/reports/latest.png${activeProbe ? `?probe=${encodeURIComponent(activeProbe.id)}` : ''}`} download><Download />下载 PNG</a></Button></div></div><div className="overflow-auto rounded-md border bg-muted/20 p-2"><img key={`${reportKey}-${activeProbe?.id || ''}`} src={`/api/reports/latest.png?t=${reportKey}${activeProbe ? `&probe=${encodeURIComponent(activeProbe.id)}` : ''}`} alt="节点检测报告" className="min-w-[900px] max-w-none" /></div></TabsContent>
-        <TabsContent value="settings"><SettingsView config={monitoring} notifications={notifications} onSaved={load} notify={notify} /></TabsContent>
-      </Tabs>
+      {mediaRunning && <div className="mb-5 rounded-lg border bg-card p-4 shadow-sm"><div className="flex items-center justify-between text-sm"><span className="flex min-w-0 items-center gap-2"><LoaderCircle className="size-4 shrink-0 animate-spin" /><span className="truncate">{probes.length > 1 && mediaJob.probeId ? `${probes.find(item => item.id === mediaJob.probeId)?.name || mediaJob.probeId} · ` : ''}正在检测解锁：{mediaJob.currentNode || '节点'}</span></span><span className="ml-4 shrink-0 font-mono text-xs">{mediaJob.completed}/{mediaJob.total}</span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200"><div className="h-full bg-zinc-800 transition-all" style={{ width: `${mediaJob.total ? mediaJob.completed / mediaJob.total * 100 : 0}%` }} /></div></div>}
+      {lostCount > 0 && statusFilter !== 'lost' && <button type="button" onClick={() => setStatusFilter('lost')} className="mb-4 flex w-full items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-left text-sm text-red-800 hover:bg-red-100/70"><span className="size-2 rounded-full bg-red-500" />{lostCount} 个节点有服务解锁失效（红点标记），点击只看这些节点</button>}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        {probes.length > 1 && <Select aria-label="探针" className="min-w-36" value={activeProbe?.id || ''} onChange={value => { chooseProbe(value); setSelected(new Set()); }}>{probes.filter(item => item.enabled).map(item => <option key={item.id} value={item.id}>{item.name}{!item.online ? '（离线）' : ''}</option>)}</Select>}
+        <div className="relative min-w-56 flex-1 sm:max-w-sm"><Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input className="pl-9" value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索节点、地址或协议" /></div>
+        <Select className="min-w-36" value={sourceFilter} onChange={setSourceFilter}><option value="all">全部来源</option>{sources.map(source => <option key={source}>{source}</option>)}</Select>
+        <Select className="min-w-28" value={statusFilter} onChange={setStatusFilter}><option value="all">全部状态</option><option value="online">在线</option><option value="offline">离线</option><option value="pending">待检测</option><option value="lost">解锁失效</option><option value="retired">已不在订阅中</option></Select>
+        <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">{selected.size > 0 && <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>取消选择（{selected.size}）</Button>}<span>显示 {filtered.length} / {nodes.length}</span></div>
+      </div>
+      <NodeTable nodes={filtered} columns={system.unlock?.columns || []} selected={selected} onSelect={select} onDelete={exclude} />
+    </>,
+    sources: <SourcesView subscriptions={subscriptions} imports={imports} sourceStatus={(system.sourceStatus || []).filter(Boolean)} globalRefresh={monitoring?.subscriptionRefreshMinutes ?? 30} reload={load} notify={notify} />,
+    deep: <><PageHeader title="深度测试" description="在指定 miaospeed 后端上跑延迟、测速、拓扑或解锁测试，生成 PNG 报告。" /><DeepTestView subscriptions={subscriptions} imports={imports} notify={notify} /></>,
+    report: <>
+      <PageHeader title="检测报告" description={`当前节点矩阵${activeProbe && probes.length > 1 ? ` · ${activeProbe.name}` : ''}`} actions={<><Button variant="outline" onClick={() => setReportKey(Date.now())}><RefreshCw />重新生成</Button><Button asChild><a href={`/api/reports/latest.png${activeProbe ? `?probe=${encodeURIComponent(activeProbe.id)}` : ''}`} download><Download />下载 PNG</a></Button></>} />
+      <div className="overflow-auto rounded-lg border bg-card p-3 shadow-sm"><img key={`${reportKey}-${activeProbe?.id || ''}`} src={`/api/reports/latest.png?t=${reportKey}${activeProbe ? `&probe=${encodeURIComponent(activeProbe.id)}` : ''}`} alt="节点检测报告" className="min-w-[900px] max-w-none" /></div>
+    </>,
+    logs: <LogsView notify={notify} />,
+    settings: <><PageHeader title="设置" description="检测周期、miaospeed 后端、解锁检测与告警通知。" /><SettingsView config={monitoring} notifications={notifications} onSaved={load} notify={notify} /></>
+  };
+
+  return <TooltipProvider><div className="min-h-screen lg:pl-60">
+    <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r bg-card lg:flex">
+      <Brand />
+      <nav className="grid gap-0.5 px-3 py-2">{VIEWS.map(item => <NavButton key={item.id} item={item} active={view === item.id} onClick={() => chooseView(item.id)} />)}</nav>
+      <div className="mt-auto grid gap-4 border-t px-5 py-4">
+        <ProbeList probes={probes} />
+        {auth.authEnabled && <div className="flex items-center justify-between gap-2"><span className="truncate text-sm text-muted-foreground">{auth.username || '管理员'}</span><Button size="sm" variant="outline" onClick={logout}><LogOut />退出登录</Button></div>}
+      </div>
+    </aside>
+    <header className="sticky top-0 z-30 border-b bg-card lg:hidden">
+      <div className="flex h-14 items-center justify-between gap-3 pr-4"><Brand compact />{auth.authEnabled && <Button size="sm" variant="outline" onClick={logout}><LogOut />退出登录</Button>}</div>
+      <nav className="flex gap-1 overflow-x-auto px-3 pb-2">{VIEWS.map(item => <NavButton key={item.id} item={item} active={view === item.id} onClick={() => chooseView(item.id)} />)}</nav>
+    </header>
+    <main className="mx-auto max-w-[1600px] px-4 py-6 sm:px-8 sm:py-8">
+      {message && <div role="status" className={`fixed bottom-4 right-4 z-50 flex max-w-sm items-center gap-2 rounded-lg border px-4 py-3 text-sm shadow-lg ${message.error ? 'border-red-200 bg-red-50 text-red-800' : 'bg-card'}`}>{message.error ? <X className="size-4 shrink-0" /> : <Check className="size-4 shrink-0 text-emerald-600" />}{message.text}</div>}
+      <div key={current.id}>{pages[current.id]}</div>
     </main>
   </div></TooltipProvider>;
+}
+
+const VIEWS = [
+  { id: 'nodes', label: '节点', icon: Server },
+  { id: 'sources', label: '来源', icon: Globe2 },
+  { id: 'deep', label: '深度测试', icon: Zap },
+  { id: 'report', label: '报告', icon: FileImage },
+  { id: 'logs', label: '日志', icon: ScrollText },
+  { id: 'settings', label: '设置', icon: Settings2 }
+];
+
+function Brand({ compact = false }) {
+  return <div className={`flex items-center gap-2.5 ${compact ? 'px-4' : 'h-16 px-5'}`}>
+    <div className="flex size-8 items-center justify-center rounded-md bg-foreground text-background"><Activity className="size-4" /></div>
+    <span className="text-sm font-semibold">Node Watcher</span>
+  </div>;
+}
+
+function NavButton({ item, active, onClick }) {
+  const Icon = item.icon;
+  return <button type="button" onClick={onClick} aria-current={active ? 'page' : undefined}
+    className={`flex h-9 shrink-0 items-center gap-2.5 rounded-md px-3 text-sm transition-colors ${active ? 'bg-accent font-medium text-foreground' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'}`}>
+    <Icon className="size-4" />{item.label}
+  </button>;
+}
+
+// miaospeed backends and whether they are connected, at the bottom of the sidebar.
+function ProbeList({ probes }) {
+  const enabled = probes.filter(item => item.enabled);
+  return <div className="grid gap-2">
+    <div className="text-xs font-medium text-muted-foreground">miaospeed 后端</div>
+    {enabled.length === 0 && <div className="text-sm text-muted-foreground">未配置</div>}
+    {enabled.map(probe => <div key={probe.id} className="flex items-center justify-between gap-2 text-sm">
+      <span className="flex min-w-0 items-center gap-2"><span className={`size-2 shrink-0 rounded-full ${probe.online ? 'bg-emerald-500' : 'bg-red-500'}`} /><span className="truncate">{probe.name}</span></span>
+      <span className="shrink-0 text-xs text-muted-foreground">{probe.online ? '在线' : '离线'}</span>
+    </div>)}
+  </div>;
+}
+
+function PageHeader({ title, description, actions }) {
+  return <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+    <div className="min-w-0"><h1 className="text-xl font-semibold">{title}</h1>{description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}</div>
+    {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+  </div>;
 }
 
 createRoot(document.getElementById('root')).render(<React.StrictMode><App /></React.StrictMode>);

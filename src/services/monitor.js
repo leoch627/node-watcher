@@ -10,6 +10,8 @@ const SAVE_DEBOUNCE_MS = 2000;
 class MonitorService {
   constructor(options = {}) {
     this.nodeStatus = new Map();
+    // Ids of the current node list (set by syncNodes); null until the first sync.
+    this.trackedIds = null;
     // nodeId -> { firstCheck, buckets: { "<hour start ms>": [onlineChecks, totalChecks] } }
     this.nodeHistory = new Map();
     this.historyPath = options.historyPath || process.env.HISTORY_FILE || path.join(process.cwd(), 'data', 'history.json');
@@ -139,8 +141,11 @@ class MonitorService {
 
   // Records one probe result from a miaospeed backend. Results without a definite online/offline
   // verdict (the backend could not test) must not touch state or history.
+  // Results for a node that left the node list (its subscription was refreshed while the check that
+  // produced them was still running) are dropped too, or the node would reappear until the next refresh.
   applyProbeResult(node, result, options = {}) {
     if (!result || result.skipped || typeof result.online !== 'boolean') return null;
+    if (this.trackedIds && !this.trackedIds.has(node.id)) return null;
     const status = {
       online: result.online,
       responseTime: Number.isFinite(result.latency) ? result.latency : null,
@@ -218,9 +223,11 @@ class MonitorService {
   }
 
   getAllStatus() { return Array.from(this.nodeStatus.values()); }
-  getOfflineNodes() { return this.getAllStatus().filter(status => status.online === false); }
-  getOnlineNodes() { return this.getAllStatus().filter(status => status.online === true); }
-  getPendingNodes() { return this.getAllStatus().filter(status => status.online == null); }
+  // Without nodes that left their subscription (kept for display, no longer checked).
+  getActiveStatus() { return this.getAllStatus().filter(status => !status.node.retired); }
+  getOfflineNodes() { return this.getActiveStatus().filter(status => status.online === false); }
+  getOnlineNodes() { return this.getActiveStatus().filter(status => status.online === true); }
+  getPendingNodes() { return this.getActiveStatus().filter(status => status.online == null); }
 
   getPublicStats() {
     return this.getAllStatus().map(status => ({
@@ -235,6 +242,7 @@ class MonitorService {
 
   syncNodes(nodes) {
     const ids = new Set(nodes.map(node => node.id));
+    this.trackedIds = ids;
     for (const id of this.nodeStatus.keys()) if (!ids.has(id)) this.nodeStatus.delete(id);
     for (const node of nodes) {
       const previous = this.nodeStatus.get(node.id);

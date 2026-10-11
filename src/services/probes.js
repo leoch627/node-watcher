@@ -88,7 +88,7 @@ class ProbeRegistry {
   describe() {
     return this.list().map(probe => {
       const monitor = this.monitorFor(probe.id);
-      const statuses = monitor ? monitor.getAllStatus() : [];
+      const statuses = monitor ? monitor.getActiveStatus() : [];
       return {
         ...probe,
         summary: {

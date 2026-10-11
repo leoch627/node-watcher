@@ -72,6 +72,21 @@ test('miaospeed results record HTTP latency, RTT and history', () => {
   assert.equal(failed.rtt, null);
 });
 
+test('late results for a node removed by a subscription refresh do not bring it back', () => {
+  const svc = new MonitorService({ historyPath: tmpHistory() });
+  const old = node('old');
+  const fresh = node('new');
+  svc.syncNodes([old]);
+  // the subscription is refreshed while a check that still holds the old node list is running
+  svc.syncNodes([fresh]);
+  assert.equal(svc.applyProbeResult(old, { online: true, latency: 120 }), null);
+  assert.equal(svc.getNodeStatus('old'), undefined);
+  assert.deepEqual(svc.getAllStatus().map(status => status.node.id), ['new']);
+  assert.equal(svc.nodeHistory.has('old'), false);
+  assert.equal(svc.applyProbeResult(fresh, { online: true, latency: 80 }).online, true);
+  if (svc.saveTimer) clearTimeout(svc.saveTimer);
+});
+
 test('uptime is computed from hourly buckets and old buckets are pruned', () => {
   const svc = new MonitorService({ historyPath: tmpHistory() });
   const n = node('up');

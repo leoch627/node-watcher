@@ -8,5 +8,5 @@ export function Badge({ className, variant = 'secondary', ...props }) {
     warning: 'bg-amber-50 text-amber-800 ring-amber-600/20',
     outline: 'bg-background text-foreground ring-border'
   };
-  return <span className={cn('inline-flex h-6 items-center rounded-md px-2 text-xs font-medium ring-1 ring-inset', variants[variant], className)} {...props} />;
+  return <span className={cn('inline-flex h-6 shrink-0 items-center whitespace-nowrap rounded-md px-2 text-xs font-medium ring-1 ring-inset', variants[variant], className)} {...props} />;
 }

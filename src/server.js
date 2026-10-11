@@ -23,6 +23,8 @@ const authRouter = require('./routes/auth');
 const backendsRouter = require('./routes/backends');
 const deepTestsRouter = require('./routes/deepTests');
 const unlockRouter = require('./routes/unlock');
+const eventsRouter = require('./routes/events');
+const eventLog = require('./services/eventLog');
 const miaospeedBackends = require('./miaospeed/backends');
 const { httpsConfigFromEnv, createHttpsListener, acmeChallenge, httpsRedirect } = require('./utils/https');
 
@@ -97,6 +99,7 @@ app.use('/api/reports', reportsRouter);
 app.use('/api/backends', backendsRouter);
 app.use('/api/deep-tests', deepTestsRouter);
 app.use('/api/unlock', unlockRouter);
+app.use('/api/events', eventsRouter);
 
 // Serve frontend for all other routes
 app.get('*', (req, res) => {
@@ -166,6 +169,7 @@ async function shutdown(reason, exitCode = 0) {
   try {
     schedulerService.stopMonitoring();
     registry.flushAll();
+    eventLog.flushSync();
     // Not awaited: open connections (reverse links) end with miaospeedBackends.stop() or the exit.
     httpsListener.close();
     await miaospeedBackends.stop();

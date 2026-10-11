@@ -86,6 +86,8 @@ class ConfigManager {
         failureThreshold: parseInt(process.env.FAILURE_THRESHOLD, 10) || 2,
         // How often subscriptions are re-downloaded (independent of the probe interval).
         subscriptionRefreshMinutes: parseInt(process.env.SUBSCRIPTION_REFRESH_MINUTES, 10) || 30,
+        // Drop nodes a subscription no longer lists; off = keep them listed (unchecked) as retired.
+        pruneRemovedNodes: false,
         customHealthCheckUrl: process.env.CUSTOM_HEALTH_CHECK_URL || ''
       },
       subscriptions: [],

@@ -17,11 +17,17 @@ router.put('/', (req, res) => {
     return res.status(400).json({ success: false, error: 'Unknown script id' });
   }
   if (chosen && chosen.length > 30) return res.status(400).json({ success: false, error: 'Choose at most 30 scripts' });
+  // Scheduled unlock check every N hours (0 = off).
+  const scheduleHours = body.scheduleHours === undefined ? undefined : Number(body.scheduleHours);
+  if (scheduleHours !== undefined && (!Number.isInteger(scheduleHours) || scheduleHours < 0 || scheduleHours > 720)) {
+    return res.status(400).json({ success: false, error: 'Schedule must be an integer between 0 and 720 hours' });
+  }
   const cfg = config.getConfig();
   cfg.unlock = {
     ...(cfg.unlock || {}),
     ...(chosen ? { scripts: chosen } : {}),
-    ...(typeof body.regional === 'boolean' ? { regional: body.regional } : {})
+    ...(typeof body.regional === 'boolean' ? { regional: body.regional } : {}),
+    ...(scheduleHours !== undefined ? { scheduleHours } : {})
   };
   if (!config.updateConfig(cfg)) return res.status(500).json({ success: false, error: 'Could not save configuration' });
   res.json({ success: true, settings: schedulerService.unlockSettings() });

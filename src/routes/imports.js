@@ -35,7 +35,7 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ success: false, error: parsed.errors[0]?.error || 'No supported nodes found' });
   }
   const item = config.addImport({ name: String(name).trim(), content, nodeCount: parsed.proxies.length });
-  await schedulerService.reloadSubscriptions();
+  await schedulerService.rebuildNodes();
   return res.status(201).json({ success: true, import: { ...item, content: undefined }, errors: parsed.errors });
 });
 
@@ -43,7 +43,7 @@ router.delete('/:id', async (req, res) => {
   if (!config.removeImport(req.params.id)) {
     return res.status(404).json({ success: false, error: 'Import not found' });
   }
-  await schedulerService.reloadSubscriptions();
+  await schedulerService.rebuildNodes();
   return res.json({ success: true });
 });
 

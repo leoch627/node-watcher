@@ -7,4 +7,5 @@ const path = require('node:path');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'node-watcher-test-'));
 if (!process.env.HISTORY_FILE) process.env.HISTORY_FILE = path.join(dir, 'history.json');
 if (!process.env.CONFIG_FILE) process.env.CONFIG_FILE = path.join(dir, 'config.json');
+if (!process.env.EVENTS_FILE) process.env.EVENTS_FILE = path.join(dir, 'events.json');
 module.exports = { dir };

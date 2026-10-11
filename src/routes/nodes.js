@@ -18,6 +18,18 @@ function withProbes(statuses) {
   return statuses.map(status => ({ ...status, probes: registry.nodeAcrossProbes(status.node.id) }));
 }
 
+// Counts leave out nodes that left their subscription (listed, but no longer checked).
+function summarize(statuses) {
+  const active = statuses.filter(item => !item.node.retired);
+  return {
+    total: active.length,
+    online: active.filter(item => item.online === true).length,
+    offline: active.filter(item => item.online === false).length,
+    pending: active.filter(item => item.online == null).length,
+    retired: statuses.length - active.length
+  };
+}
+
 // Get all node status
 router.get('/', (req, res) => {
   try {
@@ -28,12 +40,7 @@ router.get('/', (req, res) => {
       success: true,
       probe: { id: probe.id, name: probe.name },
       nodes: status,
-      summary: {
-        total: status.length,
-        online: probe.monitor.getOnlineNodes().length,
-        offline: probe.monitor.getOfflineNodes().length,
-        pending: probe.monitor.getPendingNodes().length
-      }
+      summary: summarize(status)
     });
   } catch (error) {
     res.status(500).json({
@@ -53,12 +60,7 @@ router.get('/public', (req, res) => {
       success: true,
       probe: { id: probe.id, name: probe.name },
       stats: stats,
-      summary: {
-        total: stats.length,
-        online: stats.filter(s => s.online === true).length,
-        offline: stats.filter(s => s.online === false).length,
-        pending: stats.filter(s => s.online == null).length
-      }
+      summary: summarize(stats)
     });
   } catch (error) {
     res.status(500).json({
@@ -123,8 +125,8 @@ router.delete('/:id', async (req, res) => {
     const { id } = req.params;
     config.addNodeExclusion(id);
     
-    // Reload to apply exclusion
-    const nodes = await schedulerService.reloadSubscriptions();
+    // Rebuild the node list to apply the exclusion
+    const nodes = await schedulerService.rebuildNodes();
     
     res.json({
       success: true,

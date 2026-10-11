@@ -84,9 +84,19 @@ router.put('/monitoring', (req, res) => {
       updates.customHealthCheckUrl = url;
     }
 
+    if (body.pruneRemovedNodes !== undefined) {
+      if (typeof body.pruneRemovedNodes !== 'boolean') {
+        return res.status(400).json({ success: false, error: 'pruneRemovedNodes must be a boolean' });
+      }
+      updates.pruneRemovedNodes = body.pruneRemovedNodes;
+    }
+
     const cfg = config.getConfig();
+    const pruneChanged = updates.pruneRemovedNodes !== undefined && updates.pruneRemovedNodes !== (cfg.monitoring?.pruneRemovedNodes === true);
     cfg.monitoring = { ...(cfg.monitoring || {}), ...updates };
     config.updateConfig(cfg);
+    // Turning pruning on drops the nodes kept from earlier fetches right away.
+    if (pruneChanged) schedulerService.rebuildNodes().catch(() => {});
 
     // Restart the timers when either interval changed
     if (updates.checkIntervalMinutes !== undefined || updates.subscriptionRefreshMinutes !== undefined) {

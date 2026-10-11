@@ -70,6 +70,115 @@ test('node loads run one at a time and a failed load does not break later ones',
   assert.deepEqual(order, ['start-1', 'end-1', 'start-2', 'end-2', 'start-3', 'end-3']);
 });
 
+// A scheduler over a fixed configuration whose subscriptions serve `served[url]` (proxy lists).
+function refreshHarness(monitoring = {}) {
+  const config = require('../src/utils/config');
+  const cfg = {
+    monitoring: { subscriptionRefreshMinutes: 30, ...monitoring },
+    subscriptions: [
+      { id: 'a', name: 'A', url: 'https://a.example.com/sub' },
+      { id: 'b', name: 'B', url: 'https://b.example.com/sub', refreshMinutes: 0 }
+    ],
+    imports: [], manualNodes: [], excludeNodes: []
+  };
+  const served = {
+    'https://a.example.com/sub': [proxy, { ...proxy, name: 'Osaka', server: 'b.example.com' }],
+    'https://b.example.com/sub': [{ ...proxy, name: 'HK', server: 'hk.example.com' }]
+  };
+  const fetched = [];
+  const synced = [];
+  const restoreConfig = stub(config, { getConfig: () => cfg });
+  const restoreSubscription = stub(subscriptionService, {
+    getNodes: async url => { fetched.push(url); return { proxies: served[url], errors: [] }; }
+  });
+  const scheduler = new SchedulerService({ probes: { syncNodes: nodes => synced.push(nodes) } });
+  return { scheduler, cfg, served, fetched, synced, restore: () => { restoreConfig(); restoreSubscription(); } };
+}
+
+test('refreshing one subscription downloads only that one and keeps the others', async () => {
+  const { scheduler, fetched, restore } = refreshHarness();
+  try {
+    await scheduler.loadNodes();
+    assert.equal(fetched.length, 2);
+    assert.equal(scheduler.nodes.length, 3);
+    fetched.length = 0;
+    const status = await scheduler.refreshSubscription('a');
+    assert.deepEqual(fetched, ['https://a.example.com/sub']);
+    assert.equal(status.ok, true);
+    assert.equal(status.refreshMinutes, 30);
+    assert.ok(status.nextRefreshAt);
+    assert.equal(scheduler.nodes.length, 3);
+    fetched.length = 0;
+    await scheduler.loadNodes({ refresh: 'cached' });
+    assert.deepEqual(fetched, []);
+  } finally {
+    restore();
+  }
+});
+
+test('the auto-refresh only downloads subscriptions whose own interval has elapsed', async () => {
+  const { scheduler, fetched, restore } = refreshHarness();
+  try {
+    await scheduler.loadNodes();
+    fetched.length = 0;
+    await scheduler.loadNodes({ refresh: 'due' });
+    assert.deepEqual(fetched, []);
+    // 31 minutes later: A (global 30 min) is due, B (manual only) never is.
+    for (const entry of scheduler.subscriptionResults.values()) entry.fetchedAt -= 31 * 60000;
+    await scheduler.loadNodes({ refresh: 'due' });
+    assert.deepEqual(fetched, ['https://a.example.com/sub']);
+    assert.equal(scheduler.sourceStatusFor('b').nextRefreshAt, null);
+  } finally {
+    restore();
+  }
+});
+
+test('nodes that leave a subscription are kept as retired unless pruning is on', async () => {
+  const { scheduler, cfg, served, synced, restore } = refreshHarness();
+  try {
+    await scheduler.loadNodes();
+    served['https://a.example.com/sub'] = [proxy];
+    await scheduler.refreshSubscription('a');
+    assert.equal(scheduler.nodes.length, 2);
+    assert.deepEqual(scheduler.retiredNodes.map(node => node.name), ['Osaka']);
+    assert.equal(scheduler.retiredNodes[0].retired, true);
+    // retired nodes are listed (synced to the monitors) but not part of the checked node list
+    assert.equal(synced.at(-1).length, 3);
+    assert.equal(scheduler.sourceStatusFor('a').retiredCount, 1);
+    // a node that comes back is active again
+    served['https://a.example.com/sub'] = [proxy, { ...proxy, name: 'Osaka', server: 'b.example.com' }];
+    await scheduler.refreshSubscription('a');
+    assert.deepEqual(scheduler.retiredNodes, []);
+    assert.equal(scheduler.nodes.length, 3);
+
+    served['https://a.example.com/sub'] = [proxy];
+    await scheduler.refreshSubscription('a');
+    assert.equal(scheduler.retiredNodes.length, 1);
+    cfg.monitoring.pruneRemovedNodes = true;
+    await scheduler.rebuildNodes();
+    assert.deepEqual(scheduler.retiredNodes, []);
+    assert.equal(synced.at(-1).length, 2);
+  } finally {
+    restore();
+  }
+});
+
+test('a failed fetch neither retires nor drops nodes', async () => {
+  const { scheduler, served, restore } = refreshHarness();
+  try {
+    await scheduler.loadNodes();
+    served['https://a.example.com/sub'] = undefined;
+    subscriptionService.getNodes = async () => { throw new Error('ETIMEDOUT'); };
+    const status = await scheduler.refreshSubscription('a');
+    assert.equal(status.ok, false);
+    assert.ok(status.lastSuccessAt);
+    assert.equal(scheduler.nodes.length, 3);
+    assert.deepEqual(scheduler.retiredNodes, []);
+  } finally {
+    restore();
+  }
+});
+
 function alertHarness({ ok = true } = {}) {
   const calls = { single: [], batch: [], incident: [], marked: [] };
   const outcome = () => [{ service: 'telegram', success: ok, ...(ok ? {} : { error: 'channel down' }) }];
@@ -282,4 +391,111 @@ test('skipped probes do not inflate the failure ratio into an incident', async (
   }
   assert.deepEqual(calls.incident, []);
   assert.deepEqual(calls.single, [['a', false, true]]);
+});
+
+// --- unlock change tracking, scheduled unlock checks, event log ---------------------------------
+
+const { EventLog, diffUnlock } = require('../src/services/eventLog');
+const tmpEvents = () => new EventLog({ file: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'nw-events-')), 'events.json') });
+
+test('unlock diffs report lost, restored and region changes and ignore error results', () => {
+  const unlockedJP = { status: 'unlocked', region: 'JP' };
+  const first = diffUnlock({}, { netflix: unlockedJP, youtube: { status: 'error' } }, 't0');
+  assert.deepEqual(first.changes, []);
+  assert.deepEqual(Object.keys(first.next), ['netflix']);
+
+  const lost = diffUnlock(first.next, { netflix: { status: 'blocked', region: null } }, 't1');
+  assert.deepEqual(lost.changes.map(item => item.kind), ['lost']);
+  assert.deepEqual([lost.next.netflix.lostSince, lost.next.netflix.lostRegion], ['t1', 'JP']);
+
+  const stillLost = diffUnlock(lost.next, { netflix: { status: 'na' } }, 't2');
+  assert.deepEqual(stillLost.changes, []);
+  assert.equal(stillLost.next.netflix.lostSince, 't1');
+  assert.equal(diffUnlock(stillLost.next, { netflix: { status: 'error' } }, 't3').next.netflix.lostSince, 't1');
+
+  const restored = diffUnlock(stillLost.next, { netflix: unlockedJP }, 't4');
+  assert.deepEqual(restored.changes.map(item => item.kind), ['restored']);
+  assert.equal(restored.next.netflix.lostSince, undefined);
+
+  assert.deepEqual(diffUnlock(restored.next, { netflix: { status: 'unlocked', region: 'US' } }).changes.map(item => item.kind), ['region']);
+});
+
+test('an unlock that disappears between checks is logged and marked until it comes back', async () => {
+  const probes = fakeProbes([{ id: 'local', name: '本机', type: 'local', enabled: true, online: true }]);
+  let answer = { text: '解锁(jp)', background: '186,230,126' };
+  const run = async (backendId, nodes, { onResult }) => {
+    nodes.forEach(node => onResult(node.id, { scripts: { netflix: answer }, outbound: { main: { ip: '1.1.1.1', countryCode: 'JP' } } }));
+    return { results: new Map() };
+  };
+  const events = tmpEvents();
+  const scheduler = new SchedulerService({ probes, run, events });
+  const node = { ...sample('jp'), region: 'JP', proxy };
+  scheduler.nodes = [node];
+  probes.syncNodes([node]);
+  const monitor = probes.monitorFor('local');
+  monitor.updateNodeStatus(node, { online: true });
+  const check = () => scheduler.executeMediaJob({ status: 'running', total: 1, completed: 0, errors: 0, skipped: 0, trigger: 'manual', changes: 0 }, 'local', [node]);
+
+  await check();
+  assert.equal(events.list({ category: 'unlock' }).filter(item => item.service).length, 0, 'the first result is only a baseline');
+  answer = { text: '失败', background: '239,107,115' };
+  await check();
+  const lost = events.list({ category: 'unlock' }).find(item => item.service === 'netflix');
+  assert.equal(lost.level, 'warning');
+  assert.match(lost.title, /Netflix 解锁失效/);
+  assert.equal(lost.detail, '解锁 JP → 失败');
+  const marked = monitor.getNodeStatus('jp').media.services.netflix;
+  assert.ok(marked.lostSince);
+  assert.equal(marked.lostRegion, 'JP');
+
+  answer = { text: '解锁(jp)', background: '186,230,126' };
+  await check();
+  assert.match(events.list({ category: 'unlock' }).find(item => item.service === 'netflix').title, /恢复解锁/);
+  assert.equal(monitor.getNodeStatus('jp').media.services.netflix.lostSince, undefined);
+  // each run also logs a summary line
+  assert.equal(events.list({ category: 'unlock' }).filter(item => !item.service).length, 3);
+});
+
+test('the scheduled unlock check runs once per interval and retries later when it cannot start', () => {
+  const config = require('../src/utils/config');
+  const restoreConfig = stub(config, { getConfig: () => ({ unlock: { scheduleHours: 24 }, monitoring: {} }) });
+  const events = tmpEvents();
+  const scheduler = new SchedulerService({ probes: fakeProbes([]), events });
+  const started = [];
+  let fail = true;
+  scheduler.startMediaCheck = (ids, probe, options) => {
+    started.push(options.trigger);
+    return fail ? { status: 'failed', error: '后端 本机 不在线' } : { status: 'running' };
+  };
+  try {
+    const now = Date.parse('2026-10-11T00:00:00Z');
+    scheduler.unlockDue(now);
+    assert.deepEqual(started, ['schedule']);
+    assert.match(events.list()[0].title, /未能开始/);
+    scheduler.unlockDue(now + 30 * 60000);
+    assert.equal(started.length, 1, 'waits an hour before retrying');
+    fail = false;
+    scheduler.unlockDue(now + 61 * 60000);
+    assert.equal(started.length, 2);
+    assert.ok(events.lastScheduledUnlockAt);
+    scheduler.unlockDue(now + 23 * 3600000);
+    assert.equal(started.length, 2, 'not again within 24 h');
+    scheduler.unlockDue(now + 61 * 60000 + 24 * 3600000);
+    assert.equal(started.length, 3);
+  } finally {
+    restoreConfig();
+  }
+});
+
+test('the event log and unlock baselines survive a restart', () => {
+  const events = tmpEvents();
+  events.add({ category: 'node', level: 'error', title: 'A 离线' });
+  events.setBaseline('local', 'n1', { netflix: { status: 'blocked', lostSince: 't1' } });
+  events.markScheduledUnlock('2026-10-11T00:00:00.000Z');
+  events.saveNow();
+  const reloaded = new EventLog({ file: events.file });
+  assert.equal(reloaded.list()[0].title, 'A 离线');
+  assert.equal(reloaded.baseline('local', 'n1').netflix.lostSince, 't1');
+  assert.equal(reloaded.lastScheduledUnlockAt, '2026-10-11T00:00:00.000Z');
+  assert.deepEqual(reloaded.list({ category: 'unlock' }), []);
 });
