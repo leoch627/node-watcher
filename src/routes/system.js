@@ -84,6 +84,13 @@ router.put('/monitoring', (req, res) => {
       updates.customHealthCheckUrl = url;
     }
 
+    if (body.unifiedDelay !== undefined) {
+      if (typeof body.unifiedDelay !== 'boolean') {
+        return res.status(400).json({ success: false, error: 'unifiedDelay must be a boolean' });
+      }
+      updates.unifiedDelay = body.unifiedDelay;
+    }
+
     if (body.pruneRemovedNodes !== undefined) {
       if (typeof body.pruneRemovedNodes !== 'boolean') {
         return res.status(400).json({ success: false, error: 'pruneRemovedNodes must be a boolean' });

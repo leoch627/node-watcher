@@ -111,12 +111,16 @@ function writeStored(key, value) {
   try { window.localStorage.setItem(key, value); } catch { /* storage unavailable */ }
 }
 
-function ProbeDots({ probes }) {
+// Main latency: the 1-RTT delay (one request round trip) when that setting is on and miaospeed
+// measured it, otherwise the HTTP delay including connection setup.
+const mainDelay = (status, oneRtt) => (oneRtt && status?.rtt ? status.rtt : status?.responseTime) ?? null;
+
+function ProbeDots({ probes, oneRtt }) {
   if (!probes?.length) return <span className="text-muted-foreground">-</span>;
   return <div className="flex items-center gap-1.5">
     {probes.map(probe => {
       const tone = probe.online === true ? 'bg-emerald-500' : probe.online === false ? 'bg-red-500' : 'bg-zinc-300';
-      const state = probe.online === true ? `在线 ${probe.responseTime ?? '-'} ms` : probe.online === false ? '离线' : '无数据';
+      const state = probe.online === true ? `在线 ${mainDelay(probe, oneRtt) ?? '-'} ms` : probe.online === false ? '离线' : '无数据';
       return <Tooltip key={probe.id} content={`${probe.name}：${state}${probe.lastCheck ? `\n${formatTime(probe.lastCheck)}` : ''}`}>
         <span className={`inline-block size-2.5 rounded-full ${tone}`} aria-label={`${probe.name} ${state}`} />
       </Tooltip>;
@@ -526,7 +530,14 @@ function NodeState({ online }) {
   return <span className={`inline-flex items-center gap-1.5 ${online ? 'text-emerald-700' : 'text-red-700'}`}><span className={`size-1.5 rounded-full ${online ? 'bg-emerald-500' : 'bg-red-500'}`} />{online ? '在线' : '离线'}</span>;
 }
 
-function NodeTable({ nodes, columns, selected, onSelect, onDelete }) {
+function DelayCell({ status, oneRtt }) {
+  const useRtt = oneRtt && status.rtt;
+  const other = useRtt ? status.responseTime : status.rtt;
+  const tip = useRtt ? '1-RTT 延迟 / HTTP 延迟（含建连）' : 'HTTP 延迟（含建连）/ 1-RTT 延迟';
+  return <Tooltip content={tip}><span>{mainDelay(status, oneRtt)} ms{other ? <span className="ml-1 text-muted-foreground">/ {other}</span> : null}</span></Tooltip>;
+}
+
+function NodeTable({ nodes, columns, selected, onSelect, onDelete, oneRtt }) {
   const multiProbe = nodes.some(item => item.probes?.length > 1);
   return <div className="overflow-x-auto rounded-lg border bg-card shadow-sm">
     <table className="w-full min-w-[1200px] border-collapse text-sm">
@@ -554,11 +565,11 @@ function NodeTable({ nodes, columns, selected, onSelect, onDelete }) {
             <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{status.node.server}:{status.node.port}</div>
           </td>
           <td className="whitespace-nowrap px-3 py-2.5">{status.node.retired ? <Tooltip content="订阅更新后已不包含这个节点，不再检测；显示的是最后一次结果。可在设置中开启自动删除。"><span><Badge variant="outline">已不在订阅中</Badge></span></Tooltip> : <NodeState online={status.online} />}</td>
-          <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs tabular-nums">{status.online ? <Tooltip content="HTTP 延迟（含建连）/ 延迟 RTT"><span>{status.responseTime} ms{status.rtt ? <span className="ml-1 text-muted-foreground">/ {status.rtt}</span> : null}</span></Tooltip> : '-'}</td>
+          <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs tabular-nums">{status.online ? <DelayCell status={status} oneRtt={oneRtt} /> : '-'}</td>
           <td className="max-w-40 truncate px-3 py-2.5 text-muted-foreground" title={status.node.subscription}>{status.node.subscription}</td>
           <td className="px-3 py-2.5"><Badge variant="outline">{String(status.node.protocol).toUpperCase()}</Badge></td>
           <td className="px-3 py-2.5"><RegionCell node={status.node} media={status.media} /></td>
-          {multiProbe && <td className="px-3 py-2.5"><ProbeDots probes={status.probes} /></td>}
+          {multiProbe && <td className="px-3 py-2.5"><ProbeDots probes={status.probes} oneRtt={oneRtt} /></td>}
           {columns.map(column => <td key={column.id} className="px-3 py-2.5 text-center"><ServiceState value={status.media?.services?.[column.id]} /></td>)}
           <td className="px-3 py-2.5"><RegionalServices services={status.media?.services} /></td>
           <td className="px-3 py-2.5 text-right"><Tooltip content="从列表中移除，之后不再检测（订阅里重新出现也不会加回）"><Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => onDelete(status.node)}>排除</Button></Tooltip></td>
@@ -675,7 +686,7 @@ function ChannelHeader({ icon: Icon, name, detail, enabled, onEnabledChange }) {
 }
 
 function SettingsView({ config, notifications, onSaved, notify }) {
-  const defaultMonitoring = { checkIntervalMinutes: 5, timeoutSeconds: 10, retryAttempts: 1, failureThreshold: 2, subscriptionRefreshMinutes: 30, pruneRemovedNodes: false, customHealthCheckUrl: '' };
+  const defaultMonitoring = { checkIntervalMinutes: 5, timeoutSeconds: 10, retryAttempts: 1, failureThreshold: 2, subscriptionRefreshMinutes: 30, pruneRemovedNodes: false, customHealthCheckUrl: '', unifiedDelay: true };
   const [monitoringForm, setMonitoringForm] = useState(config || defaultMonitoring);
   const [channels, setChannels] = useState({
     bark: { enabled: false, url: '' },
@@ -742,7 +753,8 @@ function SettingsView({ config, notifications, onSaved, notify }) {
         <label className="grid gap-2 text-sm font-medium">连续失败多少次才告警<Input type="number" min="1" max="10" value={monitoringForm.failureThreshold ?? 2} onChange={e => setMonitoringForm({ ...monitoringForm, failureThreshold: Number(e.target.value) })} /></label>
         <label className="grid gap-2 text-sm font-medium">订阅自动刷新（分钟）<Input type="number" min="1" value={monitoringForm.subscriptionRefreshMinutes ?? 30} onChange={e => setMonitoringForm({ ...monitoringForm, subscriptionRefreshMinutes: Number(e.target.value) })} /></label>
         <label className="flex items-start justify-between gap-4 rounded-md border px-4 py-3 sm:col-span-3"><span className="grid gap-1"><span className="text-sm font-medium">订阅更新后自动删除已不存在的节点</span><span className="text-xs text-muted-foreground">关闭时，订阅里消失的节点保留在列表中并标记“已不在订阅中”，不再检测、不发告警。</span></span><Switch checked={monitoringForm.pruneRemovedNodes === true} onCheckedChange={value => setMonitoringForm({ ...monitoringForm, pruneRemovedNodes: value })} aria-label="订阅更新后自动删除已不存在的节点" /></label>
-        <label className="grid gap-2 text-sm font-medium sm:col-span-3">探测地址（留空使用默认 gstatic generate_204）<Input type="url" placeholder="https://www.gstatic.com/generate_204" value={monitoringForm.customHealthCheckUrl ?? ''} onChange={e => setMonitoringForm({ ...monitoringForm, customHealthCheckUrl: e.target.value })} /></label>
+        <label className="flex items-start justify-between gap-4 rounded-md border px-4 py-3 sm:col-span-3"><span className="grid gap-1"><span className="text-sm font-medium">使用 1-RTT 延迟</span><span className="text-xs text-muted-foreground">只计一次请求往返，不含经代理建连和 TLS 握手，与 mihomo 的 unified-delay（Clash Party 的“使用 1-RTT 延迟测试”）相同口径。关闭时显示含建连的 HTTP 延迟；HTTPS 探测地址还要多一次 TLS 握手，数值会明显偏高。在线判定不受影响。</span></span><Switch checked={monitoringForm.unifiedDelay !== false} onCheckedChange={value => setMonitoringForm({ ...monitoringForm, unifiedDelay: value })} aria-label="使用 1-RTT 延迟" /></label>
+        <label className="grid gap-2 text-sm font-medium sm:col-span-3">探测地址（留空使用默认 gstatic generate_204）<Input type="url" placeholder="http://www.gstatic.com/generate_204" value={monitoringForm.customHealthCheckUrl ?? ''} onChange={e => setMonitoringForm({ ...monitoringForm, customHealthCheckUrl: e.target.value })} /></label>
       </div>
       <Button className="mt-6" type="submit" disabled={Boolean(saving)}>{saving === 'monitoring' ? <LoaderCircle className="animate-spin" /> : <Check />}保存检测设置</Button>
     </form>
@@ -859,7 +871,8 @@ function App() {
   const mediaJob = system.jobs?.media;
   const lastCheck = nodes.map(item => item.lastCheck).filter(Boolean).sort().at(-1);
   const lostCount = nodes.filter(item => Object.values(item.media?.services || {}).some(value => value?.lostSince)).length;
-  const avgLatency = nodes.filter(item => item.online && item.responseTime).reduce((sum, item, _, all) => sum + item.responseTime / all.length, 0);
+  const oneRtt = monitoring?.unifiedDelay !== false;
+  const avgLatency = nodes.filter(item => item.online && mainDelay(item, oneRtt)).reduce((sum, item, _, all) => sum + mainDelay(item, oneRtt) / all.length, 0);
 
   const healthCheck = async () => { setBusy('health'); try { await api('/api/nodes/check', { method: 'POST', body: '{}' }); await load(); notify('连通性检测完成'); } catch (error) { notify(error.message, true); } finally { setBusy(''); } };
   const mediaCheck = async () => { setBusy('media'); try { await api('/api/nodes/media-check', { method: 'POST', body: JSON.stringify({ nodeIds: [...selected], probeId: activeProbe?.id || null }) }); await load(); notify(selected.size ? `已提交 ${selected.size} 个节点` : '已提交全部节点'); } catch (error) { notify(error.message, true); } finally { setBusy(''); } };
@@ -887,7 +900,7 @@ function App() {
         <Metric label="全部节点" value={summary.total} detail={`${sources.length} 个来源`} />
         <Metric label="在线" value={summary.online} detail={summary.total ? `${Math.round(summary.online / summary.total * 100)}% 可用` : '-'} tone="text-emerald-700" />
         <Metric label="离线" value={summary.offline} detail={summary.pending ? `${summary.pending} 个待检测` : '最近一轮检测'} tone={summary.offline ? 'text-red-700' : ''} />
-        <Metric label="平均延迟" value={avgLatency ? `${Math.round(avgLatency)} ms` : '-'} detail="HTTP 延迟（含建连）" />
+        <Metric label="平均延迟" value={avgLatency ? `${Math.round(avgLatency)} ms` : '-'} detail={oneRtt ? '1-RTT 延迟' : 'HTTP 延迟（含建连）'} />
       </section>
       {mediaRunning && <div className="mb-5 rounded-lg border bg-card p-4 shadow-sm"><div className="flex items-center justify-between text-sm"><span className="flex min-w-0 items-center gap-2"><LoaderCircle className="size-4 shrink-0 animate-spin" /><span className="truncate">{probes.length > 1 && mediaJob.probeId ? `${probes.find(item => item.id === mediaJob.probeId)?.name || mediaJob.probeId} · ` : ''}正在检测解锁：{mediaJob.currentNode || '节点'}</span></span><span className="ml-4 shrink-0 font-mono text-xs">{mediaJob.completed}/{mediaJob.total}</span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200"><div className="h-full bg-zinc-800 transition-all" style={{ width: `${mediaJob.total ? mediaJob.completed / mediaJob.total * 100 : 0}%` }} /></div></div>}
       {lostCount > 0 && statusFilter !== 'lost' && <button type="button" onClick={() => setStatusFilter('lost')} className="mb-4 flex w-full items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-left text-sm text-red-800 hover:bg-red-100/70"><span className="size-2 rounded-full bg-red-500" />{lostCount} 个节点有服务解锁失效（红点标记），点击只看这些节点</button>}
@@ -898,7 +911,7 @@ function App() {
         <Select className="min-w-28" value={statusFilter} onChange={setStatusFilter}><option value="all">全部状态</option><option value="online">在线</option><option value="offline">离线</option><option value="pending">待检测</option><option value="lost">解锁失效</option><option value="retired">已不在订阅中</option></Select>
         <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">{selected.size > 0 && <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>取消选择（{selected.size}）</Button>}<span>显示 {filtered.length} / {nodes.length}</span></div>
       </div>
-      <NodeTable nodes={filtered} columns={system.unlock?.columns || []} selected={selected} onSelect={select} onDelete={exclude} />
+      <NodeTable nodes={filtered} columns={system.unlock?.columns || []} selected={selected} onSelect={select} onDelete={exclude} oneRtt={oneRtt} />
     </>,
     sources: <SourcesView subscriptions={subscriptions} imports={imports} sourceStatus={(system.sourceStatus || []).filter(Boolean)} globalRefresh={monitoring?.subscriptionRefreshMinutes ?? 30} reload={load} notify={notify} />,
     deep: <><PageHeader title="深度测试" description="在指定 miaospeed 后端上跑延迟、测速、拓扑或解锁测试，生成 PNG 报告。" /><DeepTestView subscriptions={subscriptions} imports={imports} notify={notify} /></>,

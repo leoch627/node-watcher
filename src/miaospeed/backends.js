@@ -67,6 +67,11 @@ class BackendManager extends EventEmitter {
     return this.localSettings().enabled !== false;
   }
 
+  // False only while the local engine should run (MIAOSPEED_LOCAL and the dashboard switch) but does not.
+  engineReady() {
+    return !this.local.enabled || !this.localEnabled() || Boolean(this.local.ready);
+  }
+
   commit(apply, undo) {
     apply();
     if (this.store.saveConfig()) return;

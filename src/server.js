@@ -68,7 +68,7 @@ app.use(express.static(path.join(__dirname, '../public')));
 // Public API routes
 // Liveness: the web server is up. `status` reads "degraded" while the local miaospeed is enabled but
 // not running (without it only remote backends can test).
-const engineReady = () => !miaospeedBackends.local.enabled || miaospeedBackends.local.ready;
+const engineReady = () => miaospeedBackends.engineReady();
 app.get('/api/health', (req, res) => {
   const ready = engineReady();
   res.json({

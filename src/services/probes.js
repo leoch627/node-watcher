@@ -80,6 +80,7 @@ class ProbeRegistry {
         id: probe.id, name: probe.name,
         online: status?.online ?? null,
         responseTime: status?.responseTime ?? null,
+        rtt: status?.rtt ?? null,
         lastCheck: status?.lastCheck ?? null
       };
     });

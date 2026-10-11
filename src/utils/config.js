@@ -88,7 +88,11 @@ class ConfigManager {
         subscriptionRefreshMinutes: parseInt(process.env.SUBSCRIPTION_REFRESH_MINUTES, 10) || 30,
         // Drop nodes a subscription no longer lists; off = keep them listed (unchecked) as retired.
         pruneRemovedNodes: false,
-        customHealthCheckUrl: process.env.CUSTOM_HEALTH_CHECK_URL || ''
+        customHealthCheckUrl: process.env.CUSTOM_HEALTH_CHECK_URL || '',
+        // Show miaospeed's RTT (one request round trip on an established connection, like mihomo's
+        // unified-delay, which Clash Party turns on by default) as the main latency instead of the
+        // HTTP delay including connection setup. Display only; online/offline is unaffected.
+        unifiedDelay: true
       },
       subscriptions: [],
       imports: [],

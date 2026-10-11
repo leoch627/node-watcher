@@ -379,7 +379,9 @@ class SchedulerService {
     if (status.confirmedDown && !before?.confirmedDown && status.seenOnline) {
       this.events.add({ ...base, level: 'error', title: `${node.name} 离线${where}`, detail: `连续 ${status.consecutiveFailures} 次检测失败：${status.error || '连接失败'}` });
     } else if (status.online && before?.confirmedDown) {
-      this.events.add({ ...base, title: `${node.name} 恢复在线${where}`, detail: status.responseTime ? `HTTP 延迟 ${status.responseTime} ms` : '' });
+      const oneRtt = config.getConfig().monitoring?.unifiedDelay !== false && status.rtt;
+      const delay = oneRtt ? `1-RTT 延迟 ${status.rtt} ms` : status.responseTime ? `HTTP 延迟 ${status.responseTime} ms` : '';
+      this.events.add({ ...base, title: `${node.name} 恢复在线${where}`, detail: delay });
     }
   }
 

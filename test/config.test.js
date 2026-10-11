@@ -26,6 +26,7 @@ test('configs written by older versions get the new monitoring keys and all noti
   assert.equal(config.monitoring.checkIntervalMinutes, 1);        // explicit value wins
   assert.equal(config.monitoring.failureThreshold, 2);            // new key gets its default
   assert.equal(config.monitoring.subscriptionRefreshMinutes, 30);
+  assert.equal(config.monitoring.unifiedDelay, true);              // 1-RTT delay on by default
   assert.ok(config.notifications.email.auth);
   assert.ok(config.notifications.telegram);
   assert.equal(config.subscriptions[0].name, 'Airport');

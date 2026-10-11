@@ -276,3 +276,17 @@ test('generated certificate sets carry the right names and usages', () => {
   assert.throws(() => generateMtlsBundle({ hosts: [] }), /域名或 IP/);
   assert.throws(() => generateMtlsBundle({ hosts: ['a b'] }), /无效/);
 });
+
+test('the engine counts as ready while the local miaospeed is switched off or not wanted', () => {
+  const local = { ...noLocal, enabled: true, ready: false };
+  const manager = new BackendManager({ store: memoryStore(), local });
+  assert.equal(manager.engineReady(), false);           // wanted, not running: degraded
+  manager.localSettings().enabled = false;
+  assert.equal(manager.engineReady(), true);            // switched off in the dashboard
+  manager.localSettings().enabled = true;
+  local.ready = true;
+  assert.equal(manager.engineReady(), true);            // running
+  local.enabled = false;
+  local.ready = false;
+  assert.equal(manager.engineReady(), true);            // MIAOSPEED_LOCAL=false
+});
