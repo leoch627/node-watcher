@@ -3,6 +3,7 @@
 //    speed sparkline and the UDP NAT type;
 //  - topology: entry analysis (grouped by entry IP) and exit analysis (nodes clustered by exit IP).
 const svg = require('./render/svg');
+const { speedPasses, passResult } = require('./deepTest');
 const scripts = require('../miaospeed/scripts');
 const reportService = require('./report');
 const {
@@ -41,12 +42,11 @@ function sparkline(x, y, width, speeds, globalMax) {
   return out;
 }
 
-function sortRows(rows, sort) {
-  const value = (row, key) => {
-    const v = row.result?.[key];
-    return Number.isFinite(v) && v > 0 ? v : null;
-  };
-  if (sort === 'speed') return [...rows].sort((a, b) => (value(b, 'avgSpeed') ?? -1) - (value(a, 'avgSpeed') ?? -1));
+// speedOf(row): the value "sort by speed" uses (the first speed pass's average).
+function sortRows(rows, sort, speedOf = () => null) {
+  const positive = v => (Number.isFinite(v) && v > 0 ? v : null);
+  const value = (row, key) => positive(row.result?.[key]);
+  if (sort === 'speed') return [...rows].sort((a, b) => (positive(speedOf(b)) ?? -1) - (positive(speedOf(a)) ?? -1));
   if (sort === 'rtt' || sort === 'http') return [...rows].sort((a, b) => (value(a, sort) ?? Infinity) - (value(b, sort) ?? Infinity));
   return rows;
 }
@@ -57,25 +57,37 @@ function filterLabel(filter = {}) {
   return filter.include || filter.exclude ? `${filter.include || ''}<->${filter.exclude || ''}` : '<->';
 }
 
+function speedCell(x, y, w, value) {
+  if (value == null) return cell(x, y, w, '-', { color: MUTED });
+  return cell(x, y, w, formatSpeed(value), { fill: value > 0 ? pick(SPEED_SCALE, (value * 8) / 1e6) : FAILED_FILL, color: value > 0 ? INK : MUTED });
+}
+
 async function renderSpeed(job, { appVersion = '', sort = null } = {}) {
-  const speed = job.preset === 'speed';
-  const rows = sortRows(job.nodes.map((node, index) => ({ node, index, result: job.results[node.id] })), sort);
+  const passes = speedPasses(job);
+  const rows = sortRows(job.nodes.map((node, index) => ({ node, index, result: job.results[node.id] })), sort,
+    row => passResult(row.result, passes[0])?.avg);
+  // Per pass: average and maximum, plus the per-second sparkline while the table stays readable.
+  const withSeries = passes.length <= 2;
+  const labelWidth = label => Math.max(150, Math.ceil(svg.textWidth(label, FONT) + 28));
   const columns = [
     { key: 'index', label: '序号', width: 64 },
     { key: 'name', label: '节点名称', width: nameWidth(rows.map(row => row.node.name)) },
     { key: 'type', label: '类型', width: 150 },
     { key: 'rtt', label: '延迟RTT', width: 120 },
     { key: 'http', label: 'HTTP延迟', width: 120 },
-    ...(speed ? [
-      { key: 'avg', label: '平均速度', width: 160 },
-      { key: 'max', label: '最大速度', width: 160 },
-      { key: 'series', label: '每秒速度', width: 150 }
-    ] : []),
+    ...passes.flatMap(pass => {
+      const prefix = passes.length > 1 ? pass.label : '';
+      return [
+        { key: 'avg', pass, label: `${prefix}${prefix ? '均速' : '平均速度'}` },
+        { key: 'max', pass, label: `${prefix}${prefix ? '峰值' : '最大速度'}` },
+        ...(withSeries ? [{ key: 'series', pass, label: `${prefix}${prefix ? '曲线' : '每秒速度'}` }] : [])
+      ].map(column => ({ ...column, width: labelWidth(column.label) }));
+    }),
     { key: 'udp', label: 'UDP类型', width: 210 }
   ];
   const width = columns.reduce((sum, column) => sum + column.width, 0);
-  const globalMax = Math.max(0, ...rows.flatMap(row => row.result?.speeds || []));
-  const heading = `Node Watcher ${speed ? '测速' : '延迟测试'}${speed ? ` - ${job.options.downloadThreading > 1 ? `${job.options.downloadThreading}线程` : '单线程'}测速` : ''} | ${job.backend.name}`;
+  const peaks = new Map(passes.map(pass => [pass.key, Math.max(0, ...rows.flatMap(row => passResult(row.result, pass)?.speeds || []))]));
+  const heading = `Node Watcher ${passes.length ? `测速 - ${passes.map(pass => pass.label).join(' / ')}` : '延迟测试'} | ${job.backend.name}`;
   let body = title(width, heading) + header(columns, 44, width);
   let y = 44 + ROW;
   let x = 0;
@@ -91,13 +103,8 @@ async function renderSpeed(job, { appVersion = '', sort = null } = {}) {
         case 'rtt':
         case 'http': body += latencyCell(x, y, w, result?.[column.key]); break;
         case 'avg':
-        case 'max': {
-          const value = result?.[column.key === 'avg' ? 'avgSpeed' : 'maxSpeed'];
-          if (value == null) body += cell(x, y, w, '-', { color: MUTED });
-          else body += cell(x, y, w, formatSpeed(value), { fill: value > 0 ? pick(SPEED_SCALE, (value * 8) / 1e6) : FAILED_FILL, color: value > 0 ? INK : MUTED });
-          break;
-        }
-        case 'series': body += sparkline(x, y, w, result?.speeds, globalMax); break;
+        case 'max': body += speedCell(x, y, w, passResult(result, column.pass)?.[column.key] ?? null); break;
+        case 'series': body += sparkline(x, y, w, passResult(result, column.pass)?.speeds, peaks.get(column.pass.key)); break;
         case 'udp': body += cell(x, y, w, result ? (result.udpType || 'Unknown') : '-', { color: result ? INK : MUTED }); break;
         default: break;
       }
@@ -110,10 +117,15 @@ async function renderSpeed(job, { appVersion = '', sort = null } = {}) {
   const seconds = Math.round((job.durationMs || 0) / 1000);
   const backend = `${job.backend.name}${job.version ? `(${job.version})` : ''}`;
   const parts = [`版本=${appVersion}`, `后端=${backend}`];
-  if (speed) parts.push(`消耗流量=${formatBytes(job.trafficBytes)}`, `线程=↓${job.options.downloadThreading}`, `时长=${job.options.downloadDuration}s`);
+  if (passes.length) {
+    const threads = passes.map(pass => `${pass.direction === 'upload' ? '↑' : '↓'}${pass.threads}`).join('/');
+    parts.push(`消耗流量=${formatBytes(job.trafficBytes)}`, `线程=${threads}`, `时长=${job.options.duration ?? job.options.downloadDuration}s`);
+  }
   parts.push(`排序=${SORT_LABEL[sort] || '订阅原序'}`, `耗时=${seconds}s`, `Ping=${job.options.pingAverageOver}次`, `过滤器=${filterLabel(job.filter)}`);
   const status = job.status === 'completed' ? '' : ` [${job.status === 'cancelled' ? '已取消' : job.status === 'running' ? '进行中' : '未完成'} ${job.completed}/${job.total}]`;
-  const foot = footer([parts.join('  '), `测试时间=${formatTime(job.startedAt)}  测试结果仅供参考，以实际情况为准${status}`], y, width);
+  const lines = [parts.join('  '), `测试时间=${formatTime(job.startedAt)}  测试结果仅供参考，以实际情况为准${status}`];
+  for (const warning of job.warnings || []) lines.push(`注意：${warning}`);
+  const foot = footer(lines, y, width);
   body += foot.body;
   const height = y + foot.height;
   return toPng(svg.document(width, height, body), width, height);

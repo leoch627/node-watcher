@@ -1,6 +1,8 @@
 const express = require('express');
 const backends = require('../miaospeed/backends');
 const registry = require('../services/probes');
+const { peekCertificate } = require('../miaospeed/session');
+const { generateMtlsBundle } = require('../utils/certs');
 
 const router = express.Router();
 const SAFE_IMAGE = /^[A-Za-z0-9._\/:@-]+$/;
@@ -30,7 +32,8 @@ function reverseBase(req) {
 // Everything a new reverse backend needs: its URL plus ready-to-run commands per platform.
 function connectInfo(req, record) {
   const url = `${reverseBase(req)}${backends.REVERSE_PREFIX}${encodeURIComponent(record.id)}`;
-  const args = `server -connect ${sq(url)} -token ${sq(record.token)}`;
+  // -upload: miaospeed refuses upload speed tests unless it is started with it.
+  const args = `server -connect ${sq(url)} -token ${sq(record.token)} -upload`;
   const probe = mode => `wget -N ${sq(SCRIPT_URL)} && bash node-watcher.sh probe${mode ? ` --mode ${mode}` : ''} --connect ${sq(url)} --token ${sq(record.token)}`;
   return {
     url,
@@ -41,7 +44,7 @@ function connectInfo(req, record) {
     docker: `docker run -d --name miaospeed --restart unless-stopped ${MIAOSPEED_IMAGE} ${args}`,
     binary: `./miaospeed ${args}`,
     // url (validated above) and token (base64url) contain no characters cmd.exe treats specially.
-    windows: `miaospeed.exe server -connect "${url}" -token "${record.token}"`
+    windows: `miaospeed.exe server -connect "${url}" -token "${record.token}" -upload`
   };
 }
 
@@ -55,6 +58,31 @@ router.post('/', (req, res) => {
   try {
     const record = backends.create(req.body || {});
     res.status(201).json({ success: true, backend: publicRecord(record), ...(record.type === 'reverse' ? connectInfo(req, record) : {}) });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+// A matching set for one forward backend: CA + server pair to install on the backend, client pair
+// for the dashboard. Nothing is stored here; the form saves the CA and client pair with the backend.
+router.post('/mtls', (req, res) => {
+  try {
+    const { url, hosts, name } = req.body || {};
+    const list = Array.isArray(hosts) ? hosts.map(String) : [];
+    if (!list.length && url) {
+      try { list.push(new URL(String(url)).hostname); } catch (_) { /* reported below */ }
+    }
+    res.json({ success: true, ...generateMtlsBundle({ hosts: list, name: String(name || 'miaospeed').slice(0, 40) }) });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+// The certificate a wss:// backend serves, so it can be pinned (trust on first use, confirmed by the admin).
+router.post('/peek-cert', async (req, res) => {
+  try {
+    const { url, servername } = req.body || {};
+    res.json({ success: true, certificate: await peekCertificate(url, { servername: servername ? String(servername) : null }) });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
   }

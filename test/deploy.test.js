@@ -644,7 +644,7 @@ test('probe: deploys miaospeed with the token kept in .env (mode 600)', context 
   assert.deepEqual(Object.keys(compose.services), ['miaospeed']);
   const service = compose.services.miaospeed;
   assert.equal(service.image, '${MIAOSPEED_IMAGE:-airportr/miaospeed:4.7.8}');
-  assert.deepEqual(service.command, ['server', '-connect', '${MIAOSPEED_CONNECT:?MIAOSPEED_CONNECT must not be empty}', '-token', '${MIAOSPEED_TOKEN:?MIAOSPEED_TOKEN must not be empty}']);
+  assert.deepEqual(service.command, ['server', '-connect', '${MIAOSPEED_CONNECT:?MIAOSPEED_CONNECT must not be empty}', '-token', '${MIAOSPEED_TOKEN:?MIAOSPEED_TOKEN must not be empty}', '-upload']);
   assert.equal(service.ports, undefined, 'a probe publishes no ports');
   assert.deepEqual(service.security_opt, ['no-new-privileges:true']);
   assert.equal(service.restart, 'unless-stopped');
@@ -738,7 +738,7 @@ test('probe --mode binary installs the verified release and a systemd service wi
   assert.equal(fs.statSync(path.join(deployment.directory, '.env')).mode & 0o777, 0o600);
   const unit = fs.readFileSync(deployment.systemdUnit('miaospeed'), 'utf8');
   assert.ok(!unit.includes(sampleToken), 'token stays in the environment file');
-  for (const line of [`EnvironmentFile=${fs.realpathSync(deployment.directory)}/.env`, `ExecStart=${deployment.miaospeedBinary} server -connect \${MIAOSPEED_CONNECT} -token \${MIAOSPEED_TOKEN}`,
+  for (const line of [`EnvironmentFile=${fs.realpathSync(deployment.directory)}/.env`, `ExecStart=${deployment.miaospeedBinary} server -connect \${MIAOSPEED_CONNECT} -token \${MIAOSPEED_TOKEN} -upload`,
     'Restart=on-failure', 'RestartSec=5', 'StartLimitIntervalSec=300', 'StartLimitBurst=5', 'DynamicUser=yes', 'NoNewPrivileges=yes',
     'ProtectSystem=strict', 'ProtectHome=yes', 'PrivateTmp=yes', 'WantedBy=multi-user.target']) {
     assert.ok(unit.split('\n').includes(line), line);

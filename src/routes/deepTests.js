@@ -1,6 +1,6 @@
 const express = require('express');
 const deepTest = require('../services/deepTest');
-const { PRESETS, DOWNLOAD_URLS } = require('../services/deepTest');
+const { PRESETS, DOWNLOAD_URLS, UPLOAD_URLS } = require('../services/deepTest');
 const deepReport = require('../services/deepReport');
 const backends = require('../miaospeed/backends');
 const { version } = require('../../package.json');
@@ -15,6 +15,7 @@ router.get('/', (req, res) => {
     history: deepTest.list(),
     presets: Object.fromEntries(Object.entries(PRESETS).map(([key, value]) => [key, value.label])),
     downloadSources: Object.keys(DOWNLOAD_URLS),
+    uploadSources: Object.keys(UPLOAD_URLS),
     backends: backends.list()
   });
 });

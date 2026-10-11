@@ -57,10 +57,71 @@ test('jobs run on a backend, stream results, persist and refuse to overlap', asy
   assert.throws(() => service.start({ preset: 'latency', backendId: 'b1', include: 'zzz' }), /没有符合条件/);
 });
 
-test('speed options are clamped', () => {
+test('speed options are clamped and turned into passes', () => {
   const service = new DeepTestService({ dataDir: os.tmpdir(), manager: {}, getNodes: () => [] });
-  assert.deepEqual(service.options('speed', { downloadDuration: 99, downloadThreading: 0, downloadSource: 'evil' }),
-    { pingAverageOver: 3, taskRetry: 3, downloadDuration: 5, downloadThreading: 1, downloadSource: 'auto' });
+  const legacy = service.options('speed', { downloadDuration: 99, downloadThreading: 0, downloadSource: 'evil' });
+  assert.deepEqual(legacy, {
+    pingAverageOver: 3, taskRetry: 3, duration: 5, multiThreads: 8, downloadSource: 'auto', uploadSource: 'auto',
+    passes: [{ key: 'download-1', mode: 'download-single', direction: 'download', threads: 1, label: '单线程下载' }]
+  });
+  // An old client asking for 4 download threads gets one 4-thread pass.
+  assert.deepEqual(service.options('speed', { downloadThreading: 4 }).passes.map(pass => pass.key), ['download-4']);
+  const options = service.options('speed', { modes: ['upload-multi', 'download-single', 'bogus', 'upload-single'], multiThreads: 64, duration: 3 });
+  assert.equal(options.multiThreads, 8);
+  assert.deepEqual(options.passes.map(pass => [pass.key, pass.label]), [['download-1', '单线程下载'], ['upload-1', '单线程上传'], ['upload-8', '8线程上传']]);
+});
+
+test('speed jobs run one task per pass and merge results per node', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nw-deep-'));
+  const requests = [];
+  const manager = {
+    get: () => ({ id: 'b1', name: '后端', type: 'forward', enabled: true, online: true }),
+    available: () => [],
+    runTask: async (id, request, { onProgress }) => {
+      requests.push(request);
+      if (request.configs.downloadThreading === 8) throw new Error('speedtest is disabled on backend');
+      const upload = request.matrices.includes('USPEED_AVERAGE');
+      const results = request.nodes.map(item => (upload
+        ? { name: item.name, uploadAvgSpeed: 0, uploadMaxSpeed: 0, uploadSpeeds: [0, 0], scripts: {} }
+        : { name: item.name, rtt: 40, http: 120, udpType: 'FullCone', avgSpeed: 1000, maxSpeed: 2000, speeds: [1000, 1000], scripts: {} }));
+      results.forEach(result => onProgress({ result }));
+      return { version: '4.7.8', results };
+    }
+  };
+  const service = new DeepTestService({ dataDir: dir, manager, getNodes: () => [node('a', 'A'), node('b', 'B')] });
+  const job = service.start({ preset: 'speed', backendId: 'b1', options: { modes: ['download-single', 'download-multi', 'upload-single'], duration: 2 } });
+  assert.equal(job.total, 6);
+  while (job.status === 'running') await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(job.status, 'completed');
+  assert.equal(job.completed, 6);
+  assert.equal(requests.length, 3);
+  assert.deepEqual(requests[0].matrices, ['TEST_PING_RTT', 'TEST_PING_CONN', 'UDP_TYPE', 'SPEED_AVERAGE', 'SPEED_MAX', 'SPEED_PER_SECOND']);
+  assert.deepEqual([requests[0].configs.downloadThreading, requests[0].configs.downloadDuration], [1, 2]);
+  assert.deepEqual(requests[2].matrices, ['USPEED_AVERAGE', 'USPEED_MAX', 'USPEED_PER_SECOND']);
+  assert.deepEqual([requests[2].configs.uploadThreading, requests[2].configs.uploadDuration, requests[2].configs.uploadUrl], [1, 2, 'DYNAMIC:INTL']);
+  assert.equal(job.results.a.rtt, 40);
+  assert.deepEqual(job.results.a.speed['download-1'], { avg: 1000, max: 2000, speeds: [1000, 1000] });
+  assert.equal(job.results.a.speed['download-8'], undefined);
+  assert.equal(job.results.a.avgSpeed, undefined);
+  assert.equal(job.trafficBytes, 4000);
+  assert.equal(job.warnings.length, 2);
+  assert.match(job.warnings[0], /8线程下载：speedtest is disabled/);
+  assert.match(job.warnings[1], /-upload/);
+  const png = await deepReport.render(job, { appVersion: 't', sort: 'speed' });
+  assert.ok((await sharp(png).metadata()).width > 1000);
+});
+
+test('speed reports still render jobs saved before passes existed', async () => {
+  const job = {
+    preset: 'speed', backend: { name: 'b' }, status: 'completed', startedAt: new Date().toISOString(), filter: {}, completed: 1, total: 1,
+    options: { pingAverageOver: 1, downloadDuration: 5, downloadThreading: 4 }, nodes: [node('a', 'A')],
+    results: { a: { rtt: 1, http: 2, avgSpeed: 5e6, maxSpeed: 7e6, speeds: [5e6] } }
+  };
+  const { speedPasses, passResult } = require('../src/services/deepTest');
+  const [pass] = speedPasses(job);
+  assert.equal(pass.label, '4线程下载');
+  assert.deepEqual(passResult(job.results.a, pass), { avg: 5e6, max: 7e6, speeds: [5e6] });
+  assert.ok((await sharp(await deepReport.render(job, {})).metadata()).width > 500);
 });
 
 const geo = (ip, cc, asn, org) => ({ main: { ip, countryCode: cc, asn, org }, v4: [{ ip }], v6: [], stack: '4' });

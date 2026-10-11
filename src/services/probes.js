@@ -31,7 +31,7 @@ class ProbeRegistry {
   }
 
   defaultProbeId() {
-    const items = this.list().filter(item => item.enabled);
+    const items = this.list().filter(item => item.enabled && item.monitor !== false);
     return (items.find(item => item.online) || items[0])?.id || LOCAL_ID;
   }
 
@@ -74,7 +74,7 @@ class ProbeRegistry {
 
   // Per-probe summary of one node, for the cross-probe comparison column.
   nodeAcrossProbes(nodeId) {
-    return this.list().filter(item => item.enabled).map(probe => {
+    return this.list().filter(item => item.enabled && item.monitor !== false).map(probe => {
       const status = this.monitorFor(probe.id)?.getNodeStatus(nodeId);
       return {
         id: probe.id, name: probe.name,

@@ -79,7 +79,8 @@ class LocalMiaospeed {
     this.kill();
     this.token = crypto.randomBytes(24).toString('base64url');
     this.wsPath = `/${crypto.randomBytes(12).toString('hex')}`;
-    const args = ['server', '-bind', `127.0.0.1:${this.port}`, '-path', this.wsPath, '-token', this.token, ...this.extraArgs];
+    // -upload: upload speed tests are refused unless enabled; they only run when a test asks for them.
+    const args = ['server', '-bind', `127.0.0.1:${this.port}`, '-path', this.wsPath, '-token', this.token, '-upload', ...this.extraArgs];
     logger.info(`Starting local miaospeed: ${this.binary} (127.0.0.1:${this.port})`);
     const child = spawn(this.binary, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     this.process = child;
@@ -89,8 +90,9 @@ class LocalMiaospeed {
       const version = text.match(/MiaoSpeed version: ([^\s,]+)/);
       if (version) this.version = version[1];
       for (const line of text.split('\n')) {
-        // "Task receiving error ... close 100x" is logged every time a client closes its connection.
-        if (/^\s*(ERRO|WARN)/.test(line) && !/Allow ip range|custom websocket path|Start Listening|MiaoSpeed version|Task receiving error/.test(line)) {
+        // "Task receiving error ... close 100x" is logged every time a client closes its connection;
+        // speed test threads log every failed request of a dead node.
+        if (/^\s*(ERRO|WARN)/.test(line) && !/Allow ip range|custom websocket path|Start Listening|MiaoSpeed version|Task receiving error|(Upload|Download) .*Task \| Request error/.test(line)) {
           logger.warn(`[miaospeed] ${line.trim()}`);
         }
       }

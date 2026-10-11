@@ -153,3 +153,126 @@ test('deploy commands are shell-safe even with a hostile Host header', () => {
     assert.equal(info.url, 'ws://localhost/miaospeed/reverse/m-1');
   }
 });
+
+test('every backend has an enable and a health-check switch; the local engine stops while disabled', async () => {
+  const calls = [];
+  const local = {
+    enabled: true, ready: true, url: 'ws://127.0.0.1:1/x', token: 't',
+    status: () => ({ ready: true, version: '4.7.8', error: null }),
+    start: async () => { calls.push('start'); }, shutdown: async () => { calls.push('shutdown'); }
+  };
+  const store = memoryStore();
+  const manager = new BackendManager({ store, local });
+  assert.deepEqual(manager.list().map(item => [item.id, item.enabled, item.monitor]), [['local', true, true]]);
+
+  manager.update('local', { monitor: false });
+  assert.equal(manager.get('local').monitor, false);
+  assert.equal(manager.get('local').enabled, true);
+  assert.deepEqual(calls, []);
+
+  manager.update('local', { enabled: false });
+  assert.deepEqual(calls, ['shutdown']);
+  assert.equal(store.cfg.miaospeed.local.enabled, false);
+  assert.equal(manager.get('local').online, null);
+  assert.equal(manager.available().length, 0);
+  await assert.rejects(manager.runTask('local', {}), /已停用/);
+  // A restart keeps it off.
+  const restarted = new BackendManager({ store, local });
+  await restarted.start();
+  await restarted.stop();
+  assert.deepEqual(calls, ['shutdown', 'shutdown']);
+
+  manager.update('local', { enabled: true });
+  assert.deepEqual(calls, ['shutdown', 'shutdown', 'start']);
+
+  const reverse = manager.create({ name: 'r', type: 'reverse', monitor: false });
+  assert.equal(manager.get(reverse.id).monitor, false);
+  manager.update(reverse.id, { monitor: true, enabled: false });
+  assert.deepEqual([manager.get(reverse.id).enabled, manager.get(reverse.id).monitor], [false, true]);
+});
+
+test('forward TLS settings are validated, kept on partial updates and never listed', () => {
+  const { generateMtlsBundle } = require('../src/utils/certs');
+  const bundle = generateMtlsBundle({ hosts: ['ms.example.com'] });
+  const other = generateMtlsBundle({ hosts: ['ms.example.com'] });
+  const manager = new BackendManager({ store: memoryStore(), local: noLocal });
+  const base = { name: 'x', type: 'forward', url: 'wss://ms.example.com:8765/p', token: 't' };
+  assert.throws(() => manager.create({ ...base, url: 'ws://ms.example.com:1', ca: bundle.ca }), /wss:\/\//);
+  assert.throws(() => manager.create({ ...base, ca: 'nope' }), /PEM/);
+  assert.throws(() => manager.create({ ...base, clientCert: bundle.clientCert }), /同时提供/);
+  assert.throws(() => manager.create({ ...base, clientCert: bundle.clientCert, clientKey: other.clientKey }), /不匹配/);
+  assert.throws(() => manager.create({ ...base, ca: bundle.ca, fingerprint: 'AB'.repeat(32) }), /只能选一种/);
+  const record = manager.create({ ...base, ca: bundle.ca, clientCert: bundle.clientCert, clientKey: bundle.clientKey, servername: 'ms.example.com' });
+  const listed = manager.get(record.id);
+  assert.deepEqual([listed.customCa, listed.mtls, listed.pinned, listed.servername], [true, true, false, 'ms.example.com']);
+  assert.ok(!JSON.stringify(manager.list()).includes('PRIVATE KEY'));
+  // Undefined keeps, '' clears.
+  manager.update(record.id, { name: 'y' });
+  assert.equal(manager.get(record.id).mtls, true);
+  manager.update(record.id, { clientCert: '', clientKey: '' });
+  assert.deepEqual([manager.get(record.id).mtls, manager.get(record.id).customCa], [false, true]);
+  manager.update(record.id, { ca: '', fingerprint: 'cd'.repeat(32) });
+  assert.deepEqual([manager.get(record.id).customCa, manager.get(record.id).pinned], [false, true]);
+});
+
+// A wss:// stand-in for `miaospeed server -mtls -serverpublickey … -clientca …`: same TLS settings
+// (client certificates verified when presented, connections without one allowed).
+async function tlsServer(bundle) {
+  const https = require('node:https');
+  const server = https.createServer({ cert: bundle.serverCert, key: bundle.serverKey, ca: bundle.ca, requestCert: true, rejectUnauthorized: false });
+  const wss = new WebSocket.WebSocketServer({ noServer: true });
+  const peers = [];
+  server.on('upgrade', (req, socket, head) => {
+    if (req.socket.getPeerCertificate()?.subject && !req.socket.authorized) return socket.destroy();
+    peers.push(req.socket.authorized ? req.socket.getPeerCertificate().subject.CN : null);
+    wss.handleUpgrade(req, socket, head, ws => ws.close());
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  return { url: `wss://127.0.0.1:${server.address().port}/p`, peers, close: () => new Promise(resolve => server.close(resolve)) };
+}
+
+test('mTLS: generated certificates connect, wrong ones are refused, fingerprints can be read and pinned', async () => {
+  const { connect, peekCertificate, normalizeFingerprint } = require('../src/miaospeed/session');
+  const { generateMtlsBundle } = require('../src/utils/certs');
+  const bundle = generateMtlsBundle({ hosts: ['127.0.0.1'] });
+  const stranger = generateMtlsBundle({ hosts: ['127.0.0.1'] });
+  const server = await tlsServer(bundle);
+  try {
+    const socket = await connect(server.url, { ca: bundle.ca, cert: bundle.clientCert, key: bundle.clientKey });
+    socket.close();
+    assert.equal(server.peers.at(-1), 'node-watcher');
+    // Without a client certificate miaospeed still accepts the link (VerifyClientCertIfGiven).
+    (await connect(server.url, { ca: bundle.ca })).close();
+    assert.equal(server.peers.at(-1), null);
+    await assert.rejects(connect(server.url, { ca: bundle.ca, cert: stranger.clientCert, key: stranger.clientKey }));
+    await assert.rejects(connect(server.url, { ca: stranger.ca }), /certificate/);
+    await assert.rejects(connect(server.url, {}), /certificate/);
+    const seen = await peekCertificate(server.url);
+    assert.equal(seen.trusted, false);
+    assert.equal(seen.fingerprint, normalizeFingerprint(new (require('node:crypto').X509Certificate)(bundle.serverCert).fingerprint256));
+    (await connect(server.url, { fingerprint: seen.fingerprint })).close();
+    await assert.rejects(connect(server.url, { fingerprint: 'ab'.repeat(32) }), /pinned/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('generated certificate sets carry the right names and usages', () => {
+  const crypto = require('node:crypto');
+  const { generateMtlsBundle } = require('../src/utils/certs');
+  const bundle = generateMtlsBundle({ hosts: ['ms.example.com', '203.0.113.9', '2001:db8::1'] });
+  const ca = new crypto.X509Certificate(bundle.ca);
+  const server = new crypto.X509Certificate(bundle.serverCert);
+  const client = new crypto.X509Certificate(bundle.clientCert);
+  assert.equal(ca.ca, true);
+  assert.equal(server.ca, false);
+  assert.ok(server.checkIssued(ca) && server.verify(ca.publicKey) && client.verify(ca.publicKey));
+  assert.equal(server.checkHost('ms.example.com'), 'ms.example.com');
+  assert.equal(server.checkIP('203.0.113.9'), '203.0.113.9');
+  assert.equal(server.checkIP('2001:db8::1'), '2001:db8::1');
+  assert.deepEqual(server.keyUsage, ['1.3.6.1.5.5.7.3.1']);
+  assert.deepEqual(client.keyUsage, ['1.3.6.1.5.5.7.3.2']);
+  assert.ok(server.checkPrivateKey(crypto.createPrivateKey(bundle.serverKey)));
+  assert.throws(() => generateMtlsBundle({ hosts: [] }), /域名或 IP/);
+  assert.throws(() => generateMtlsBundle({ hosts: ['a b'] }), /无效/);
+});

@@ -84,3 +84,21 @@ test('result slots decode into flat values; zero latency means failure', () => {
   assert.equal(result.outbound.stack, '4');
   assert.equal(result.scripts.netflix.text, '解锁(jp)');
 });
+
+test('upload configs stay empty unless a task uploads; upload matrices decode separately', () => {
+  const plain = protocol.buildRequest({ id: 'x', matrices: [], nodes: [] }).Configs;
+  assert.deepEqual([plain.UploadURL, plain.UploadDuration, plain.UploadThreading], ['', 0, 0]);
+  const upload = protocol.buildRequest({ id: 'x', matrices: [], nodes: [], configs: { uploadUrl: 'DYNAMIC:INTL', uploadDuration: 5, uploadThreading: 99 } }).Configs;
+  assert.deepEqual([upload.UploadURL, upload.UploadDuration, upload.UploadThreading], ['DYNAMIC:INTL', 5, 0]);
+  const result = protocol.decodeSlot({
+    ProxyInfo: { Name: 'n' },
+    Matrices: [
+      { Type: 'SPEED_AVERAGE', Payload: '{"Value":10}' },
+      { Type: 'USPEED_AVERAGE', Payload: '{"Value":4}' },
+      { Type: 'USPEED_MAX', Payload: '{"Value":6}' },
+      { Type: 'USPEED_PER_SECOND', Payload: '{"Max":6,"Average":4,"Speeds":[2,6]}' }
+    ]
+  });
+  assert.equal(result.avgSpeed, 10);
+  assert.deepEqual([result.uploadAvgSpeed, result.uploadMaxSpeed, result.uploadSpeeds], [4, 6, [2, 6]]);
+});

@@ -1469,7 +1469,7 @@ StartLimitBurst=5
 Type=simple
 UNIT
     printf 'EnvironmentFile=%s/.env\n' "${deploy_dir//%/%%}"
-    printf 'ExecStart=%s server -connect ${MIAOSPEED_CONNECT} -token ${MIAOSPEED_TOKEN}\n' "${miaospeed_bin//%/%%}"
+    printf 'ExecStart=%s server -connect ${MIAOSPEED_CONNECT} -token ${MIAOSPEED_TOKEN} -upload\n' "${miaospeed_bin//%/%%}"
     cat <<'UNIT'
 Restart=on-failure
 RestartSec=5
@@ -1502,7 +1502,7 @@ write_openrc_script() {  # file name
     printf 'error_log=%q\n' "$(openrc_log_path "$2")"
     printf 'set -a\n. %q\nset +a\n' "$deploy_dir/.env"
     cat <<'RC'
-command_args="server -connect \"\${MIAOSPEED_CONNECT}\" -token \"\${MIAOSPEED_TOKEN}\""
+command_args="server -connect \"\${MIAOSPEED_CONNECT}\" -token \"\${MIAOSPEED_TOKEN}\" -upload"
 command_user="nobody:nobody"
 supervisor=supervise-daemon
 # Give up after 5 crashes within 5 minutes; miaospeed reconnects by itself when the master is down.
@@ -1648,7 +1648,7 @@ COMPOSE
     cat <<'COMPOSE'
     container_name: ${MIAOSPEED_CONTAINER:-miaospeed}
     # Reverse link: miaospeed dials the master; nothing is published on this machine.
-    command: ["server", "-connect", "${MIAOSPEED_CONNECT:?MIAOSPEED_CONNECT must not be empty}", "-token", "${MIAOSPEED_TOKEN:?MIAOSPEED_TOKEN must not be empty}"]
+    command: ["server", "-connect", "${MIAOSPEED_CONNECT:?MIAOSPEED_CONNECT must not be empty}", "-token", "${MIAOSPEED_TOKEN:?MIAOSPEED_TOKEN must not be empty}", "-upload"]
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped

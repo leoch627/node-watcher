@@ -173,8 +173,8 @@ class SchedulerService {
     return probe ? { id, name: probe.name } : null;
   }
 
-  // One round on every enabled probe (miaospeed backend), in parallel. `only` limits the round to
-  // the given probe ids. Probes that are offline are skipped, never recorded as node failures.
+  // One round on every enabled probe (miaospeed backend) whose health-check switch is on, in parallel.
+  // `only` limits the round to the given probe ids. Offline probes are skipped, never recorded as node failures.
   async runHealthCheck({ reload = false, only = null } = {}) {
     if (this.healthJob?.status === 'running') return this.healthJob;
     const job = {
@@ -185,7 +185,7 @@ class SchedulerService {
     try {
       if (reload) await this.loadNodes();
       const settings = this.checkOptions();
-      const probes = this.registry.list().filter(probe => probe.enabled && (!only || only.includes(probe.id)));
+      const probes = this.registry.list().filter(probe => probe.enabled && probe.monitor !== false && (!only || only.includes(probe.id)));
       job.total = this.nodes.length * Math.max(1, probes.length);
       await Promise.all(probes.map(probe => this.runProbeCheck(job, probe, settings)));
       if (job.probes.some(item => item.status === 'completed')) {

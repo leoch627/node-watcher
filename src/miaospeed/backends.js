@@ -1,15 +1,18 @@
 // miaospeed backends ("probes"): where tests run.
 //  - local:   the master's own miaospeed child process (LocalMiaospeed)
-//  - forward: a miaospeed server we dial (ws:// or wss://, token, optional build token / pinned cert)
+//  - forward: a miaospeed server we dial (ws:// or wss://, token, optional build token, pinned cert or
+//             own CA, optional client certificate for miaospeed's -clientca mTLS)
 //  - reverse: a miaospeed started with `-connect <master>/miaospeed/reverse/<id>` that dials us (msr-v1)
-// Records live in config.miaospeed.backends; tokens are never returned by list().
+// Records live in config.miaospeed.backends (the local one's switches in config.miaospeed.local);
+// tokens and keys are never returned by list(). Every backend has two switches: `enabled` (usable at
+// all) and `monitor` (takes part in scheduled health checks; deep tests may still use it).
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const WebSocket = require('ws');
 const config = require('../utils/config');
 const logger = require('../utils/logger');
 const { LocalMiaospeed } = require('./local');
-const { runOnSocket, connect, normalizeFingerprint } = require('./session');
+const { runOnSocket, connect, normalizeFingerprint, tlsOptions, validateTls } = require('./session');
 const { checkReverseHello, buildReverseAck, buildReverseError } = require('./protocol');
 const { version: APP_VERSION } = require('../../package.json');
 
@@ -53,6 +56,17 @@ class BackendManager extends EventEmitter {
     return this.records().find(item => item.id === id) || null;
   }
 
+  localSettings() {
+    const cfg = this.store.getConfig();
+    if (!cfg.miaospeed || typeof cfg.miaospeed !== 'object') cfg.miaospeed = {};
+    if (!cfg.miaospeed.local || typeof cfg.miaospeed.local !== 'object') cfg.miaospeed.local = {};
+    return cfg.miaospeed.local;
+  }
+
+  localEnabled() {
+    return this.localSettings().enabled !== false;
+  }
+
   commit(apply, undo) {
     apply();
     if (this.store.saveConfig()) return;
@@ -60,13 +74,13 @@ class BackendManager extends EventEmitter {
     throw new Error('Could not save configuration');
   }
 
-  create({ name, type, url, token, buildToken, fingerprint } = {}) {
+  create({ name, type, url, token, buildToken, fingerprint, ca, clientCert, clientKey, servername, monitor } = {}) {
     const clean = cleanName(name);
     if (!clean) throw new Error('Backend name is required');
     if (!['forward', 'reverse'].includes(type)) throw new Error('Backend type must be forward or reverse');
-    const record = { id: `m-${crypto.randomBytes(4).toString('hex')}`, name: clean, type, enabled: true, createdAt: new Date().toISOString() };
+    const record = { id: `m-${crypto.randomBytes(4).toString('hex')}`, name: clean, type, enabled: true, monitor: monitor !== false, createdAt: new Date().toISOString() };
     if (type === 'forward') {
-      Object.assign(record, this.validateForward({ url, token, buildToken, fingerprint }));
+      Object.assign(record, this.validateForward({ url, token, buildToken, fingerprint, ca, clientCert, clientKey, servername }));
     } else {
       record.token = crypto.randomBytes(24).toString('base64url');
       if (buildToken) record.buildToken = String(buildToken).trim();
@@ -77,40 +91,64 @@ class BackendManager extends EventEmitter {
     return record;
   }
 
-  validateForward({ url, token, buildToken, fingerprint }) {
+  validateForward({ url, token, buildToken, fingerprint, ca, clientCert, clientKey, servername }) {
     let parsed;
     try { parsed = new URL(String(url || '').trim()); } catch (_) { throw new Error('Invalid backend URL'); }
     if (!['ws:', 'wss:'].includes(parsed.protocol)) throw new Error('Backend URL must start with ws:// or wss://');
     if (!String(token || '')) throw new Error('Backend token is required');
     const pinned = fingerprint ? normalizeFingerprint(fingerprint) : null;
     if (fingerprint && !pinned) throw new Error('Invalid certificate fingerprint (expected 64 hex characters)');
+    const tls = validateTls({ ca, clientCert, clientKey, servername });
+    if ((pinned || Object.keys(tls).length) && parsed.protocol !== 'wss:') throw new Error('证书校验和客户端证书只能用于 wss:// 后端');
+    if (pinned && tls.ca) throw new Error('固定指纹和自定义 CA 只能选一种');
     return {
       url: parsed.toString(), token: String(token),
       ...(buildToken ? { buildToken: String(buildToken).trim() } : {}),
-      ...(pinned ? { fingerprint: pinned } : {})
+      ...(pinned ? { fingerprint: pinned } : {}),
+      ...tls
     };
   }
 
+  // Forward TLS fields: undefined keeps the stored value, '' clears it.
   update(id, patch = {}) {
+    if (id === LOCAL_ID) return this.updateLocal(patch);
     const record = this.find(id);
     if (!record) return null;
     const previous = { ...record };
+    const tlsKeys = ['fingerprint', 'buildToken', 'ca', 'clientCert', 'clientKey', 'servername'];
     this.commit(() => {
       if (typeof patch.name === 'string' && cleanName(patch.name)) record.name = cleanName(patch.name);
       if (typeof patch.enabled === 'boolean') record.enabled = patch.enabled;
-      if (record.type === 'forward' && (patch.url || patch.token || patch.fingerprint !== undefined || patch.buildToken !== undefined)) {
+      if (typeof patch.monitor === 'boolean') record.monitor = patch.monitor;
+      if (record.type === 'forward' && (patch.url || patch.token || tlsKeys.some(key => patch[key] !== undefined))) {
         const next = this.validateForward({
           url: patch.url || record.url, token: patch.token || record.token,
-          buildToken: patch.buildToken ?? record.buildToken, fingerprint: patch.fingerprint ?? record.fingerprint
+          ...Object.fromEntries(tlsKeys.map(key => [key, patch[key] ?? record[key]]))
         });
-        delete record.buildToken;
-        delete record.fingerprint;
+        for (const key of tlsKeys) delete record[key];
         Object.assign(record, next);
       }
     }, () => { for (const key of Object.keys(record)) delete record[key]; Object.assign(record, previous); });
     if (record.enabled === false) this.dropSessions(id, 'backend disabled');
     if (record.type === 'forward') this.checkForward(record).catch(() => {});
     return record;
+  }
+
+  // The local engine is stopped while disabled, so it costs nothing.
+  updateLocal(patch = {}) {
+    if (!this.local.enabled) return null;
+    const settings = this.localSettings();
+    const previous = { ...settings };
+    this.commit(() => {
+      if (typeof patch.enabled === 'boolean') settings.enabled = patch.enabled;
+      if (typeof patch.monitor === 'boolean') settings.monitor = patch.monitor;
+    }, () => { for (const key of Object.keys(settings)) delete settings[key]; Object.assign(settings, previous); });
+    if (previous.enabled !== false && settings.enabled === false) {
+      this.local.shutdown().catch(error => logger.warn(`Could not stop local miaospeed: ${error.message}`));
+    } else if (previous.enabled === false && settings.enabled !== false) {
+      this.local.start().catch(error => logger.error(`Local miaospeed failed to start: ${error.message}`));
+    }
+    return { id: LOCAL_ID, type: 'local', ...settings };
   }
 
   rotateToken(id) {
@@ -140,14 +178,19 @@ class BackendManager extends EventEmitter {
     const items = [];
     if (this.local.enabled) {
       const status = this.local.status();
-      items.push({ id: LOCAL_ID, name: this.localName, type: 'local', enabled: true,
-        online: status.ready, version: status.version, error: status.error, busy: 0, sessions: status.ready ? 1 : 0 });
+      const settings = this.localSettings();
+      const enabled = settings.enabled !== false;
+      items.push({ id: LOCAL_ID, name: this.localName, type: 'local', enabled, monitor: settings.monitor !== false,
+        online: enabled ? status.ready : null, version: status.version, error: enabled ? status.error : null,
+        busy: 0, sessions: status.ready ? 1 : 0 });
     }
     for (const record of this.records()) {
-      const base = { id: record.id, name: record.name, type: record.type, enabled: record.enabled !== false, createdAt: record.createdAt };
+      const base = { id: record.id, name: record.name, type: record.type, enabled: record.enabled !== false,
+        monitor: record.monitor !== false, createdAt: record.createdAt };
       if (record.type === 'forward') {
         const state = this.forwardState.get(record.id) || {};
-        items.push({ ...base, url: record.url, pinned: Boolean(record.fingerprint), customBuildToken: Boolean(record.buildToken),
+        items.push({ ...base, url: record.url, pinned: Boolean(record.fingerprint), customCa: Boolean(record.ca),
+          mtls: Boolean(record.clientCert), servername: record.servername || null, customBuildToken: Boolean(record.buildToken),
           online: state.online ?? null, version: state.version || null, error: state.error || null, checkedAt: state.checkedAt || null });
       } else {
         const sessions = [...(this.reverse.get(record.id) || [])];
@@ -172,7 +215,7 @@ class BackendManager extends EventEmitter {
   async checkForward(record) {
     const state = { checkedAt: new Date().toISOString() };
     try {
-      const socket = await connect(record.url, { fingerprint: record.fingerprint });
+      const socket = await connect(record.url, tlsOptions(record));
       socket.close();
       Object.assign(state, { online: true });
     } catch (error) {
@@ -201,6 +244,10 @@ class BackendManager extends EventEmitter {
     tick();
     this.timer = setInterval(tick, FORWARD_CHECK_MS);
     this.timer.unref?.();
+    if (!this.localEnabled()) {
+      logger.info('Local miaospeed is switched off in the dashboard');
+      return Promise.resolve();
+    }
     return this.local.start().catch(error => logger.error(`Local miaospeed failed to start: ${error.message}`));
   }
 
@@ -215,6 +262,7 @@ class BackendManager extends EventEmitter {
   // request: protocol.buildRequest arguments without id. Resolves { version, results }.
   async runTask(id, request, { onProgress, signal, timeoutMs } = {}) {
     if (id === LOCAL_ID) {
+      if (!this.localEnabled()) throw new Error(`后端 ${this.localName} 已停用`);
       if (!this.local.ready) throw new Error(`本机 miaospeed 未就绪${this.local.error ? `：${this.local.error}` : ''}`);
       const socket = await connect(this.local.url);
       try {
@@ -227,7 +275,7 @@ class BackendManager extends EventEmitter {
     if (!record) throw new Error('Unknown miaospeed backend');
     if (record.enabled === false) throw new Error(`后端 ${record.name} 已停用`);
     if (record.type === 'forward') {
-      const socket = await connect(record.url, { fingerprint: record.fingerprint });
+      const socket = await connect(record.url, tlsOptions(record));
       this.forwardState.set(id, { ...this.forwardState.get(id), online: true, error: null, checkedAt: new Date().toISOString() });
       try {
         const outcome = await runOnSocket(socket, { token: record.token, buildToken: record.buildToken, request, onProgress, signal, timeoutMs });

@@ -10,13 +10,13 @@ Node Watcher 是 [miaospeed](https://github.com/AirportR/miaospeed) 的控制面
 | --- | --- |
 | 多来源管理 | 独立拉取多个订阅，单个来源失败不会阻断其他来源；支持导入预检 |
 | 节点导入 | 支持 Clash YAML、Base64 通用订阅和节点链接，覆盖 VMess、VLESS、Trojan、Shadowsocks、Hysteria2 / Hy2、TUIC |
-| 定时巡检 | 定时在每个启用的 miaospeed 后端上检测节点 HTTP 延迟与 RTT，可设置周期、超时、重试和告警阈值；新节点显示为「待检测」 |
+| 定时巡检 | 定时在每个启用且开启「巡检」的 miaospeed 后端上检测节点 HTTP 延迟与 RTT，可设置周期、超时、重试和告警阈值；新节点显示为「待检测」 |
 | 在线率统计 | 按检测记录计算最近 24 小时、7 天、30 天在线率，每个探针单独统计 |
 | 解锁检测 | 基于 [miaospeed-scripts](https://github.com/CloudPassenger/miaospeed-scripts) 的 162 个脚本（流媒体、AI、游戏、网络、搜索、社交），列可自选，按节点地区自动追加区域服务，并展示出口地区 |
 | 状态告警 | 节点离线 / 恢复、探针断开 / 恢复，支持 Bark、SMTP 邮件和 Telegram Bot，可分别启用和测试 |
 | 检测报告 | 将当前节点状态和解锁结果生成 PNG 矩阵，可预览、下载 |
-| 多地探针 | miaospeed 后端：主控自带的本机 miaospeed、正向（连接已有的 miaospeed，例如给 Koipy 用的后端）和反向（NAT 后的机器主动连回主控，无需开放端口），同一份订阅从多个网络检测并对比 |
-| 深度测试 | 延迟 RTT / HTTP 延迟、UDP NAT 类型、下载测速、入口 / 出口拓扑分析和解锁测试，生成 Koipy / FullTClash 风格的 PNG 报告 |
+| 多地探针 | miaospeed 后端：主控自带的本机 miaospeed、正向（连接已有的 miaospeed，例如给 Koipy 用的后端，支持双向 TLS）和反向（NAT 后的机器主动连回主控，无需开放端口），同一份订阅从多个网络检测并对比；每个后端（含本机）可单独启用 / 停用、开关定时巡检 |
+| 深度测试 | 延迟 RTT / HTTP 延迟、UDP NAT 类型、单线程 / 多线程的下载与上传测速、入口 / 出口拓扑分析和解锁测试，生成 Koipy / FullTClash 风格的 PNG 报告 |
 | 内置 HTTPS | 一键脚本可绑定域名，自动申请并续期 Let's Encrypt 证书（HTTP 验证或 DNS API 验证） |
 | 登录保护 | 管理员登录、签名会话 Cookie、登录失败限速 |
 
@@ -458,7 +458,7 @@ docker compose ps
 ### 定时巡检与在线率
 
 - 启动时加载来源并执行一次巡检；之后按检测周期巡检，并按**订阅刷新周期**（默认 30 分钟，可单独设置）重新拉取来源。订阅刷新失败时沿用上一次成功的节点列表，节点不会因为订阅服务器短暂故障而从面板消失。
-- 每轮在**每个启用且在线的后端**上并行运行 `TEST_PING_CONN`（HTTP 延迟）和 `TEST_PING_RTT`（延迟 RTT），各后端分别记录节点状态、在线率历史和告警。并发由 miaospeed 控制，不再单独设置并发数。
+- 每轮在**每个启用、开启「巡检」且在线的后端**上并行运行 `TEST_PING_CONN`（HTTP 延迟）和 `TEST_PING_RTT`（延迟 RTT），各后端分别记录节点状态、在线率历史和告警。并发由 miaospeed 控制，不再单独设置并发数。
 - HTTP 延迟决定在线 / 离线：经节点请求 `http://www.gstatic.com/generate_204`（可在设置中改成自定义探测地址），包含建连时间；它不是 ICMP Ping 或带宽测速结果。RTT 只作参考显示。
 - 默认检测周期为 **5 分钟**，单节点超时为 **10 秒**；miaospeed 单次请求最长 10 秒，更大的设置值按 10 秒执行。
 - 一次探测失败后由 miaospeed 立即重试 `retryAttempts` 次（0–3，默认 1）。
@@ -518,9 +518,9 @@ docker compose ps
 | --- | --- |
 | 本机 | 主控启动的 miaospeed 子进程，只监听 `127.0.0.1`，每次启动使用随机 token 和路径。Docker 镜像已内置；源码运行时执行 `npm run setup:bin`。`MIAOSPEED_LOCAL=false` 可关闭，主控只使用远程后端 |
 | 反向 | 在目标机器上运行 `miaospeed server -connect wss://<主控>/miaospeed/reverse/<ID> -token <token>`，miaospeed 主动连到主控，探针机器不需要开放端口（推荐） |
-| 正向 | 主控连接一个已在运行的 `miaospeed server`：填写 `ws://` / `wss://` 地址和 token；自签证书可填 SHA-256 指纹锁定，自行编译的 miaospeed 可填编译 token |
+| 正向 | 主控连接一个已在运行的 `miaospeed server`：填写 `ws://` / `wss://` 地址和 token；`wss://` 可固定证书指纹、指定自己的 CA，并出示客户端证书（双向 TLS），自行编译的 miaospeed 可填编译 token |
 
-所有后端都在「设置 → miaospeed 后端」中管理，可停用、删除，反向后端可重置 token。每个启用的后端都参与定时巡检；「节点」页可切换探针查看，「各探针」列用圆点对比同一节点在每个网络的状态（悬停看延迟）；解锁检测和 PNG 报告跟随所选探针，深度测试可选择在哪个后端上运行。
+所有后端都在「设置 → miaospeed 后端」中管理，可编辑、删除，反向后端可重置 token。每个后端（包括本机）有两个开关：「启用」关闭后该后端不再被使用（本机 miaospeed 进程会停止，重新启用后自动启动，重启主控后仍保持关闭）；「巡检」只决定是否参与定时巡检，关闭后仍可用于深度测试，例如只想偶尔用来测速的 Koipy 后端。「节点」页可切换探针查看，「各探针」列用圆点对比同一节点在每个网络的状态（悬停看延迟）；解锁检测和 PNG 报告跟随所选探针，深度测试可选择在哪个后端上运行。
 
 ### 部署反向探针
 
@@ -555,12 +555,28 @@ miaospeed 连上后，面板中该后端显示「在线」，几秒后自动巡�
 
 已经在运行的 miaospeed（例如给 Koipy 用的后端）可以直接接入：点「添加正向后端」，填写地址（如 `wss://example.com:8765/path`）和 token。主控每 2 分钟检查一次正向后端能否连接。
 
+`wss://` 后端的服务器证书有三种校验方式：
+
+| 方式 | 适用场景 |
+| --- | --- |
+| 公共 CA | 后端使用 Let's Encrypt 等公认证书，按域名校验（默认） |
+| 固定指纹 | `miaospeed server -mtls` 使用内置证书或自签证书时。点「读取」获取后端当前证书的 SHA-256 指纹，确认后保存，之后只接受这张证书 |
+| 自定义 CA | 后端用 `-serverpublickey` / `-serverprivatekey` 加载自己 CA 签发的证书；证书里的名字与地址不同时填写「证书域名」 |
+
+**双向 TLS（mTLS）。** 在添加 / 编辑对话框里填好地址后，点「一键生成 mTLS 证书」，面板会生成一套证书：私有 CA、给后端用的服务器证书（包含地址中的域名或 IP）和给主控用的客户端证书，并自动填好「自定义 CA」和「出示客户端证书」。对话框同时给出一段命令，在后端机器上运行即可写入 `ca.crt`、`server.crt`、`server.key` 并启动：
+
+```bash
+./miaospeed server -bind 0.0.0.0:8765 -path '/path' -token '<token>' -mtls -serverpublickey server.crt -serverprivatekey server.key -clientca ca.crt -upload
+```
+
+CA 私钥不会保存，需要更换时重新生成一套。也可以粘贴已有的 CA、客户端证书和私钥（PEM，私钥不能加密）。注意：miaospeed 的 `-clientca` 是「出示了就校验」——证书不对的客户端会被拒绝，但不带证书的客户端仍能连接，身份认证仍以 token 为准。反向后端由 miaospeed 主动连接主控，miaospeed 不支持出示客户端证书，因此不适用 mTLS（主控证书 + token 认证）。
+
 ### 安全说明
 
 | 项目 | 做法 |
 | --- | --- |
 | token | 每个反向后端一个随机 token，只在创建 / 重置时显示一次；握手按 token 校验并防重放，每个测试任务也用 token 签名。面板 API 不返回任何 token，token 保存在主控的配置文件中 |
-| 证书 | 反向探针上的 miaospeed 按系统根证书校验主控证书，因此主控需要公认 CA 签发、与域名匹配的证书（一键脚本申请的 Let's Encrypt 证书即可），**不支持自签证书**。正向 `wss://` 默认按域名校验，自签证书时填写 SHA-256 指纹锁定 |
+| 证书 | 反向探针上的 miaospeed 按系统根证书校验主控证书，因此主控需要公认 CA 签发、与域名匹配的证书（一键脚本申请的 Let's Encrypt 证书即可），**不支持自签证书**。正向 `wss://` 默认按域名校验，也可固定指纹或指定自己的 CA，并可出示客户端证书（见「接入正向后端」）；客户端私钥保存在主控配置文件中，面板 API 不返回 |
 | ws:// | 不加密，测试任务里的节点密码会明文传输，只在局域网使用 |
 | 端点 | 反向连接地址 `/miaospeed/reverse/<ID>` 在 HTTP 和 HTTPS 端口上都可用，不受 HTTPS 跳转影响；未知或已停用的 ID 直接拒绝，握手 10 秒超时 |
 | 数据 | 测试任务包含节点地址和凭据，会交给执行测试的 miaospeed。探针只部署在可信的机器上，正向后端只接入自己信任的服务 |
@@ -572,11 +588,15 @@ miaospeed 连上后，面板中该后端显示「在线」，几秒后自动巡�
 | 测试 | 内容 |
 | --- | --- |
 | 延迟测试 | 延迟 RTT（TLS 握手后首包往返）、HTTP 延迟（含建连）、UDP NAT 类型（RFC 5780 STUN） |
-| 测速 | 在延迟测试基础上逐节点下载测速：平均 / 最大速度与每秒速度曲线；时长、线程和测速文件可选 |
+| 测速 | 单线程下载、多线程下载、单线程上传、多线程上传四种方式任选，附带延迟与 UDP 类型；每种方式一轮，各出平均 / 最大速度与每秒速度曲线；时长、多线程数、下载测速文件和上传地址可选 |
 | 拓扑分析 | 入口与出口 IP 的地区、ASN 和组织，入口按 IP 归组，出口按落地 IP 聚类（「簇」表示落地复用） |
 | 解锁测试 | 「设置 → 解锁检测」中选择的服务（API 可用 `options.scripts` 另选，最多 30 个）加出口地区，生成 FullTClash「连通性测试」风格的矩阵，末行为各服务的解锁占比 |
 
-> 测速会消耗大量流量：每个节点约为「时长 × 带宽」，千兆节点测 5 秒约 600 MB。请手动运行，不要频繁测速；在按流量计费的探针机器上尤其注意。
+测速的每种方式是一个独立的 miaospeed 任务、依次运行：miaospeed 同一任务里的测试项是并发执行的，下载和上传放在一起会互相抢带宽，线程数也只能设一个。某一轮失败（例如后端用 `-nospeed` 禁止了下载测速）会记为提示，其他轮继续。
+
+上传测速需要后端以 `-upload` 启动（miaospeed 默认拒绝上传测速）。本机 miaospeed、一键脚本部署的探针和面板给出的部署命令都已带上；其他已有的后端（例如给 Koipy 用的）请自行加上该参数，否则上传结果全部为 0，报告和页面会给出提示。
+
+> 测速会消耗大量流量：每个节点每轮约为「时长 × 带宽」，千兆节点测 5 秒约 600 MB，勾选几种方式就乘几倍。请手动运行，不要频繁测速；在按流量计费的探针机器上尤其注意。
 
 可按来源和名称正则（包含 / 排除）筛选节点。拓扑分析默认在线查询 IP 信息，设置 `MIAOSPEED_MMDB` 后本机 miaospeed 改用本地 GeoIP 数据库。
 
@@ -807,12 +827,14 @@ docker buildx build \
 | `GET` | `/api/system/status` | 系统、来源、后端与任务状态 |
 | `GET` | `/api/reports/latest.png` | 根据当前结果生成 PNG 报告；`?probe=<后端ID>` 指定探针 |
 | `GET` | `/api/backends` | miaospeed 后端列表与状态（不含 token） |
-| `POST` | `/api/backends` | 添加后端：`{"type":"reverse","name":"…"}` 返回连接地址、token 与部署命令（仅此一次）；`{"type":"forward","name":"…","url":"wss://…","token":"…","fingerprint":"可选","buildToken":"可选"}` |
+| `POST` | `/api/backends` | 添加后端：`{"type":"reverse","name":"…"}` 返回连接地址、token 与部署命令（仅此一次）；`{"type":"forward","name":"…","url":"wss://…","token":"…","fingerprint":"可选","ca":"可选 PEM","clientCert":"可选 PEM","clientKey":"可选 PEM","servername":"可选","buildToken":"可选","monitor":true}` |
+| `POST` | `/api/backends/mtls` | 生成一套 mTLS 证书（不保存）：`{"url":"wss://…"}` 或 `{"hosts":["域名或 IP"]}`，返回 `ca`、`serverCert`、`serverKey`、`clientCert`、`clientKey` |
+| `POST` | `/api/backends/peek-cert` | 读取 `wss://` 后端当前的服务器证书（主体、签发者、有效期、SHA-256 指纹），用于固定指纹：`{"url":"wss://…"}` |
 | `POST` | `/api/backends/:id/rotate` | 重置反向后端 token，返回新的部署命令 |
 | `POST` | `/api/backends/:id/check` | 立即检查正向后端能否连接 |
-| `PATCH` / `DELETE` | `/api/backends/:id` | 改名、启用 / 停用、修改正向地址；删除后端及其历史 |
+| `PATCH` / `DELETE` | `/api/backends/:id` | `enabled`（启用 / 停用，`local` 为本机）、`monitor`（是否参与巡检）、改名、修改正向地址与 TLS 设置（字段不传则保持不变，传空字符串清除）；删除后端及其历史 |
 | `GET` | `/api/deep-tests` | 当前任务、测试记录与可用后端 |
-| `POST` | `/api/deep-tests` | 开始测试：`{"preset":"latency\|speed\|topology\|unlock","backendId":"…","sourceId":"…","include":"正则","exclude":"正则","options":{"downloadDuration":5,"downloadThreading":1}}`；解锁测试可传 `"options":{"scripts":["netflix","chatgpt"]}` |
+| `POST` | `/api/deep-tests` | 开始测试：`{"preset":"latency\|speed\|topology\|unlock","backendId":"…","sourceId":"…","include":"正则","exclude":"正则","options":{"modes":["download-single","download-multi","upload-single","upload-multi"],"duration":5,"multiThreads":8,"downloadSource":"auto","uploadSource":"auto"}}`（测速，`modes` 任选）；解锁测试可传 `"options":{"scripts":["netflix","chatgpt"]}` |
 | `GET` / `DELETE` | `/api/deep-tests/:id` | 测试详情；删除测试记录 |
 | `GET` | `/api/deep-tests/:id/report.png` | 测试报告 PNG；`?sort=rtt\|http\|speed` 排序，`&download=1` 下载 |
 | `POST` | `/api/deep-tests/:id/cancel` | 停止正在运行的测试 |

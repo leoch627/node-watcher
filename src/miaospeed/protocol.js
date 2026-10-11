@@ -19,6 +19,10 @@ const MATRIX = {
   SPEED_AVG: 'SPEED_AVERAGE',
   SPEED_MAX: 'SPEED_MAX',
   SPEED_SERIES: 'SPEED_PER_SECOND',
+  // Upload matrices only produce data on backends started with -upload.
+  USPEED_AVG: 'USPEED_AVERAGE',
+  USPEED_MAX: 'USPEED_MAX',
+  USPEED_SERIES: 'USPEED_PER_SECOND',
   GEO_IN: 'GEOIP_INBOUND',
   GEO_OUT: 'GEOIP_OUTBOUND',
   SCRIPT: 'TEST_SCRIPT'
@@ -92,6 +96,10 @@ function normalizeConfigs(input = {}) {
     downloadUrl: input.downloadUrl || DEFAULT_CONFIGS.downloadUrl,
     downloadDuration: clamp(input.downloadDuration, 1, 30, DEFAULT_CONFIGS.downloadDuration),
     downloadThreading: clamp(input.downloadThreading, 1, 32, DEFAULT_CONFIGS.downloadThreading),
+    // Left empty unless a task uploads (miaospeed ignores them then); same ranges as download.
+    uploadUrl: input.uploadUrl ? String(input.uploadUrl) : '',
+    uploadDuration: clamp(input.uploadDuration, 1, 30, 0),
+    uploadThreading: clamp(input.uploadThreading, 1, 32, 0),
     pingAverageOver: clamp(input.pingAverageOver, 1, 16, DEFAULT_CONFIGS.pingAverageOver),
     pingAddress: input.pingAddress || DEFAULT_CONFIGS.pingAddress,
     taskRetry: clamp(input.taskRetry, 1, 10, DEFAULT_CONFIGS.taskRetry),
@@ -127,9 +135,9 @@ function buildRequest({ id, invoker = 'node-watcher', version = '', matrices, no
         TimeoutMillis: clamp(script.timeout, 0, 600000, 0)
       })),
       ApiVersion: API_VERSION,
-      UploadURL: '',
-      UploadDuration: 0,
-      UploadThreading: 0
+      UploadURL: cfg.uploadUrl,
+      UploadDuration: cfg.uploadDuration,
+      UploadThreading: cfg.uploadThreading
     },
     Vendor: 'Clash',
     Nodes: nodes.map(node => ({ Name: String(node.name), Payload: String(node.payload) })),
@@ -188,6 +196,7 @@ function parsePayload(raw) {
 }
 
 const nonNegative = value => (Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null);
+const series = data => (Array.isArray(data?.Speeds) ? data.Speeds.map(item => nonNegative(item) || 0) : []);
 
 function geoInfo(info) {
   if (!info || !info.ip) return null;
@@ -221,7 +230,10 @@ function decodeSlot(slot) {
       case MATRIX.UDP: result.udpType = data?.Value || null; break;
       case MATRIX.SPEED_AVG: result.avgSpeed = nonNegative(data?.Value); break;
       case MATRIX.SPEED_MAX: result.maxSpeed = nonNegative(data?.Value); break;
-      case MATRIX.SPEED_SERIES: result.speeds = Array.isArray(data?.Speeds) ? data.Speeds.map(item => nonNegative(item) || 0) : []; break;
+      case MATRIX.SPEED_SERIES: result.speeds = series(data); break;
+      case MATRIX.USPEED_AVG: result.uploadAvgSpeed = nonNegative(data?.Value); break;
+      case MATRIX.USPEED_MAX: result.uploadMaxSpeed = nonNegative(data?.Value); break;
+      case MATRIX.USPEED_SERIES: result.uploadSpeeds = series(data); break;
       case MATRIX.GEO_IN: result.inbound = geoStacks(data); break;
       case MATRIX.GEO_OUT: result.outbound = geoStacks(data); break;
       case MATRIX.SCRIPT:

@@ -1,6 +1,8 @@
 // Runs one miaospeed task over an open websocket (ws package). The same code serves forward
 // connections (we dialed the backend) and reverse sessions (the backend dialed us).
 const crypto = require('crypto');
+const net = require('net');
+const tls = require('tls');
 const WebSocket = require('ws');
 const { encodeRequest, buildRequest, decodeSlot } = require('./protocol');
 
@@ -77,30 +79,110 @@ function normalizeFingerprint(value) {
   return hex.length === 64 ? hex : null;
 }
 
+const PEM_CERT = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g;
+
+// Checks the TLS material of a forward backend and returns the fields to store (empty ones left out):
+//  - ca: PEM certificate(s) the backend's server certificate must chain to, instead of public CAs
+//    (for miaospeed -mtls with -serverpublickey signed by your own CA);
+//  - clientCert / clientKey: presented to the backend, which verifies them against its -clientca;
+//  - servername: the name the server certificate is checked against when it differs from the URL host.
+function validateTls({ ca, clientCert, clientKey, servername } = {}) {
+  const out = {};
+  const caText = String(ca || '').trim();
+  if (caText) {
+    const blocks = caText.match(PEM_CERT) || [];
+    if (!blocks.length) throw new Error('CA 证书不是 PEM 格式');
+    for (const block of blocks) {
+      try { new crypto.X509Certificate(block); } catch (_) { throw new Error('CA 证书无法解析'); }
+    }
+    out.ca = blocks.join('\n');
+  }
+  const certText = String(clientCert || '').trim();
+  const keyText = String(clientKey || '').trim();
+  if (Boolean(certText) !== Boolean(keyText)) throw new Error('客户端证书和私钥需要同时提供');
+  if (certText) {
+    const blocks = certText.match(PEM_CERT) || [];
+    if (!blocks.length) throw new Error('客户端证书不是 PEM 格式');
+    let leaf;
+    let key;
+    try { leaf = new crypto.X509Certificate(blocks[0]); } catch (_) { throw new Error('客户端证书无法解析'); }
+    try { key = crypto.createPrivateKey(keyText); } catch (_) { throw new Error('客户端私钥无法解析（需要未加密的 PEM）'); }
+    if (!leaf.checkPrivateKey(key)) throw new Error('客户端私钥与证书不匹配');
+    out.clientCert = blocks.join('\n');
+    out.clientKey = key.export({ type: 'pkcs8', format: 'pem' });
+  }
+  const name = String(servername || '').trim();
+  if (name) {
+    if (!/^[A-Za-z0-9.-]{1,253}$/.test(name)) throw new Error('证书域名格式不正确');
+    out.servername = name;
+  }
+  return out;
+}
+
+// connect() options from a stored forward backend record.
+function tlsOptions(record = {}) {
+  return {
+    fingerprint: record.fingerprint || null, ca: record.ca || null, cert: record.clientCert || null,
+    key: record.clientKey || null, servername: record.servername || null
+  };
+}
+
 // Opens a forward connection. With `fingerprint`, the server certificate is pinned instead of being
-// validated against public CAs (for backends using miaospeed's own or a self-signed certificate).
-function connect(url, { fingerprint = null, timeoutMs = 10000 } = {}) {
+// validated (for backends using miaospeed's embedded or a self-signed certificate); with `ca` it must
+// chain to that CA. `cert` / `key` are sent as the client certificate for miaospeed's -clientca.
+function connect(url, { fingerprint = null, ca = null, cert = null, key = null, servername = null, timeoutMs = 10000 } = {}) {
   const pinned = normalizeFingerprint(fingerprint);
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url, {
       handshakeTimeout: timeoutMs, perMessageDeflate: false, maxPayload: 64 * 1024 * 1024,
-      ...(pinned ? { rejectUnauthorized: false } : {})
+      ...(pinned ? { rejectUnauthorized: false } : {}),
+      ...(ca ? { ca } : {}),
+      ...(cert && key ? { cert, key } : {}),
+      ...(servername ? { servername } : {})
     });
+    const mismatch = () => new Error('the backend certificate does not match the pinned fingerprint');
     let verified = !pinned;
+    let refused = false;
     socket.once('upgrade', response => {
       if (!pinned) return;
       const peer = response.socket?.getPeerX509Certificate?.();
       const actual = peer ? normalizeFingerprint(peer.fingerprint256) : null;
       if (actual === pinned) verified = true;
-      else socket.terminate();
+      else { refused = true; socket.terminate(); }
     });
     socket.once('open', () => {
       if (verified) resolve(socket);
-      else reject(new Error('the backend certificate does not match the pinned fingerprint'));
+      else reject(mismatch());
     });
-    socket.once('error', error => reject(new Error(`cannot reach the miaospeed backend: ${error.message}`)));
-    socket.once('close', () => { if (!verified) reject(new Error('the backend certificate does not match the pinned fingerprint')); });
+    socket.once('error', error => reject(refused ? mismatch() : new Error(`cannot reach the miaospeed backend: ${error.message}`)));
+    socket.once('close', () => { if (!verified) reject(mismatch()); });
   });
 }
 
-module.exports = { runOnSocket, connect, normalizeFingerprint, TaskError };
+// Reads the certificate a wss:// backend presents, without trusting it, so it can be shown to the
+// admin and pinned (miaospeed -mtls serves certificates no public CA signed).
+function peekCertificate(url, { servername = null, timeoutMs = 8000 } = {}) {
+  let parsed;
+  try { parsed = new URL(String(url || '')); } catch (_) { return Promise.reject(new Error('Invalid backend URL')); }
+  if (parsed.protocol !== 'wss:') return Promise.reject(new Error('只有 wss:// 后端有证书'));
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  const sni = servername || (net.isIP(host) ? undefined : host);
+  return new Promise((resolve, reject) => {
+    const socket = tls.connect({ host, port: Number(parsed.port) || 443, servername: sni, rejectUnauthorized: false, timeout: timeoutMs }, () => {
+      const peer = socket.getPeerX509Certificate();
+      const authorized = socket.authorized;
+      const reason = socket.authorizationError ? String(socket.authorizationError) : null;
+      socket.end();
+      if (!peer) return reject(new Error('the backend presented no certificate'));
+      resolve({
+        fingerprint: normalizeFingerprint(peer.fingerprint256), subject: peer.subject, issuer: peer.issuer,
+        subjectAltName: peer.subjectAltName || null, validFrom: peer.validFrom, validTo: peer.validTo,
+        trusted: authorized, reason
+      });
+    });
+    socket.once('timeout', () => { socket.destroy(); reject(new Error('timed out')); });
+    socket.once('error', error => reject(new Error(`cannot reach the miaospeed backend: ${error.message}`)));
+  });
+}
+
+module.exports = { runOnSocket, connect, peekCertificate, normalizeFingerprint, validateTls, tlsOptions, TaskError };

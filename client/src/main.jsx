@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity, Bell, Cable, Check, ChevronDown, Copy, Download, FileImage, Gauge, Globe2, Import, KeyRound,
-  LoaderCircle, LockKeyhole, LockOpen, LogIn, LogOut, Mail, Network, Play, Plus, Radar, RefreshCw, Search,
-  Send, Server, Settings2, Smartphone, Square, Timer, Trash2, X, Zap
+  LoaderCircle, LockKeyhole, LockOpen, LogIn, LogOut, Mail, Network, Pencil, Play, Plus, Radar, RefreshCw, Search,
+  Send, Server, Settings2, ShieldCheck, Smartphone, Square, Timer, Trash2, WandSparkles, X, Zap
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -95,6 +95,10 @@ function readStored(key, fallback) {
   try { return window.localStorage.getItem(key) ?? fallback; } catch { return fallback; }
 }
 
+function readStoredJSON(key) {
+  try { const value = JSON.parse(readStored(key, '{}')); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
+}
+
 function writeStored(key, value) {
   try { window.localStorage.setItem(key, value); } catch { /* storage unavailable */ }
 }
@@ -147,55 +151,156 @@ function ConnectDetails({ info, notify }) {
   </div>;
 }
 
+const emptyForward = { name: '', url: '', token: '', buildToken: '', serverMode: 'public', fingerprint: '', ca: '', servername: '', clientMode: 'none', clientCert: '', clientKey: '' };
+
+// Files and start command for a backend using a generated mTLS set (miaospeed -mtls -clientca).
+function mtlsSetup(bundle, form) {
+  let port = '8765';
+  let wsPath = '/';
+  try { const url = new URL(form.url); port = url.port || (url.protocol === 'wss:' ? '443' : '80'); wsPath = url.pathname || '/'; } catch { /* defaults */ }
+  const files = [['ca.crt', bundle.ca], ['server.crt', bundle.serverCert], ['server.key', bundle.serverKey]]
+    .map(([file, text]) => `cat > ${file} <<'EOF'\n${text.trim()}\nEOF`).join('\n');
+  const token = form.token ? `'${form.token.replace(/'/g, "'\\''")}'` : '<token>';
+  return `mkdir -p ~/miaospeed-tls && cd ~/miaospeed-tls\n${files}\nchmod 600 server.key\n./miaospeed server -bind 0.0.0.0:${port} -path '${wsPath}' -token ${token} -mtls -serverpublickey server.crt -serverprivatekey server.key -clientca ca.crt -upload`;
+}
+
+// Add / edit a forward backend. On edit, empty secret fields keep what is stored.
+function ForwardDialog({ open, editing, onClose, onSaved, notify }) {
+  const [form, setForm] = useState(emptyForward);
+  const [busy, setBusy] = useState('');
+  const [bundle, setBundle] = useState(null);
+  const [peeked, setPeeked] = useState(null);
+  useEffect(() => {
+    if (!open) return;
+    setBundle(null); setPeeked(null);
+    setForm(editing ? {
+      ...emptyForward, name: editing.name, url: editing.url || '',
+      serverMode: editing.pinned ? 'pin' : editing.customCa ? 'ca' : 'public', servername: editing.servername || '',
+      clientMode: editing.mtls ? 'use' : 'none'
+    } : emptyForward);
+  }, [open, editing?.id]);
+  const field = key => ({ value: form[key], onChange: e => setForm(current => ({ ...current, [key]: e.target.value })) });
+  const keep = editing ? '留空保持不变' : '';
+  const generate = async () => {
+    setBusy('generate');
+    try {
+      const result = await api('/api/backends/mtls', { method: 'POST', body: JSON.stringify({ url: form.url, name: form.name }) });
+      setBundle(result);
+      setForm(current => ({ ...current, serverMode: 'ca', ca: result.ca, clientMode: 'use', clientCert: result.clientCert, clientKey: result.clientKey, fingerprint: '' }));
+    } catch (error) { notify(error.message, true); } finally { setBusy(''); }
+  };
+  const peek = async () => {
+    setBusy('peek');
+    try {
+      const { certificate } = await api('/api/backends/peek-cert', { method: 'POST', body: JSON.stringify({ url: form.url, servername: form.servername || undefined }) });
+      setPeeked(certificate);
+      setForm(current => ({ ...current, fingerprint: certificate.fingerprint }));
+    } catch (error) { notify(error.message, true); } finally { setBusy(''); }
+  };
+  const submit = async event => {
+    event.preventDefault();
+    const optional = value => (editing && !value ? undefined : value);
+    if (form.serverMode === 'pin' && !form.fingerprint && !editing?.pinned) return notify('请填写或读取证书指纹', true);
+    if (form.serverMode === 'ca' && !form.ca && !editing?.customCa) return notify('请填写 CA 证书', true);
+    if (form.clientMode === 'use' && !(form.clientCert && form.clientKey) && !editing?.mtls) return notify('请填写客户端证书和私钥', true);
+    const body = {
+      name: form.name, url: form.url, token: optional(form.token), buildToken: optional(form.buildToken),
+      fingerprint: form.serverMode === 'pin' ? optional(form.fingerprint) : '',
+      ca: form.serverMode === 'ca' ? optional(form.ca) : '',
+      servername: form.serverMode === 'public' ? '' : form.servername,
+      clientCert: form.clientMode === 'use' ? optional(form.clientCert) : '',
+      clientKey: form.clientMode === 'use' ? optional(form.clientKey) : ''
+    };
+    setBusy('save');
+    try {
+      if (editing) await api(`/api/backends/${editing.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      else await api('/api/backends', { method: 'POST', body: JSON.stringify({ type: 'forward', ...body }) });
+      notify(editing ? '后端已更新' : '后端已添加');
+      onSaved();
+    } catch (error) { notify(error.message, true); } finally { setBusy(''); }
+  };
+  const secure = form.url.trim().startsWith('wss://');
+  return <Dialog open={open} onOpenChange={value => { if (!value) onClose(); }}>
+    <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto"><form onSubmit={submit} className="grid gap-4">
+      <DialogHeader><DialogTitle>{editing ? `编辑正向后端：${editing.name}` : '添加正向后端'}</DialogTitle><DialogDescription>主控主动连接一个已在运行的 miaospeed server。</DialogDescription></DialogHeader>
+      <label className="grid gap-2 text-sm font-medium">名称<Input {...field('name')} placeholder="例如：上海联通" maxLength={40} required /></label>
+      <label className="grid gap-2 text-sm font-medium">地址<Input {...field('url')} placeholder="wss://example.com:8765/path" required /></label>
+      <label className="grid gap-2 text-sm font-medium">token<Input {...field('token')} type="password" autoComplete="off" required={!editing} placeholder={keep} /></label>
+      <label className="grid gap-2 text-sm font-medium">编译 token（可选，自行编译的 miaospeed 才需要）<Input {...field('buildToken')} autoComplete="off" placeholder={keep} /></label>
+      <div className={`grid gap-3 rounded-md border p-3 ${secure ? '' : 'opacity-60'}`}>
+        <div className="flex flex-wrap items-center justify-between gap-2"><div className="flex items-center gap-2 text-sm font-semibold"><ShieldCheck className="size-4" />TLS / 双向认证（仅 wss://）</div>
+          <Button type="button" size="sm" variant="outline" onClick={generate} disabled={!secure || Boolean(busy)}>{busy === 'generate' ? <LoaderCircle className="animate-spin" /> : <WandSparkles />}一键生成 mTLS 证书</Button></div>
+        <label className="grid gap-2 text-sm font-medium">服务器证书校验<Select value={form.serverMode} onChange={value => setForm(current => ({ ...current, serverMode: value }))} disabled={!secure}>
+          <option value="public">公共 CA（Let's Encrypt 等，按域名校验）</option><option value="pin">固定指纹（miaospeed -mtls 内置证书 / 自签证书）</option><option value="ca">自定义 CA（-serverpublickey 用自己的 CA 签发）</option>
+        </Select></label>
+        {form.serverMode === 'pin' && <div className="grid gap-2"><div className="flex gap-2"><Input {...field('fingerprint')} placeholder={editing?.pinned ? '留空保持不变（SHA-256）' : 'SHA-256 指纹，可点击读取'} className="font-mono text-xs" /><Button type="button" variant="outline" onClick={peek} disabled={!secure || Boolean(busy)}>{busy === 'peek' ? <LoaderCircle className="animate-spin" /> : <Search />}读取</Button></div>
+          {peeked && <div className="rounded-md border bg-muted/40 p-2 font-mono text-[11px] leading-5 text-muted-foreground"><div>主体：{peeked.subject?.replace(/\n/g, ', ')}</div><div>签发：{peeked.issuer?.replace(/\n/g, ', ')}</div><div>有效期至：{peeked.validTo}</div><div className="text-amber-700">请确认这是你的后端（首次读取无法防中间人）；保存后只接受这张证书。</div></div>}</div>}
+        {form.serverMode === 'ca' && <label className="grid gap-2 text-sm font-medium">CA 证书（PEM）<Textarea {...field('ca')} rows={4} className="font-mono text-xs" placeholder={editing?.customCa ? '留空保持不变' : '-----BEGIN CERTIFICATE-----'} /></label>}
+        {form.serverMode !== 'public' && <label className="grid gap-2 text-sm font-medium">证书域名（可选，证书里的名字与地址不同时填写）<Input {...field('servername')} placeholder="例如：miaospeed.example.com" /></label>}
+        <label className="grid gap-2 text-sm font-medium">客户端证书（miaospeed -clientca）<Select value={form.clientMode} onChange={value => setForm(current => ({ ...current, clientMode: value }))} disabled={!secure}><option value="none">不使用</option><option value="use">出示客户端证书</option></Select></label>
+        {form.clientMode === 'use' && <div className="grid gap-3 sm:grid-cols-2">
+          <label className="grid gap-2 text-sm font-medium">证书（PEM）<Textarea {...field('clientCert')} rows={4} className="font-mono text-xs" placeholder={editing?.mtls ? '留空保持不变' : '-----BEGIN CERTIFICATE-----'} /></label>
+          <label className="grid gap-2 text-sm font-medium">私钥（PEM）<Textarea {...field('clientKey')} rows={4} className="font-mono text-xs" placeholder={editing?.mtls ? '留空保持不变' : '-----BEGIN PRIVATE KEY-----'} /></label>
+        </div>}
+        <p className="text-xs text-muted-foreground">miaospeed 的 -clientca 是「出示了就校验」：证书不对会被拒绝，但不带证书的客户端仍可连接，身份认证仍以 token 为准。</p>
+        {bundle && <div className="grid gap-3 rounded-md border border-emerald-200 bg-emerald-50/60 p-3">
+          <div className="text-xs text-emerald-900">已生成一套证书（CA 私钥不保存）。在后端机器上运行下面的命令写入证书并启动 miaospeed，然后保存此后端。</div>
+          <CopyField label="后端机器（miaospeed 与证书放同一目录）" value={mtlsSetup(bundle, form)} notify={notify} />
+        </div>}
+      </div>
+      <DialogFooter><Button type="button" variant="outline" onClick={onClose}>取消</Button><Button disabled={busy === 'save'}>{busy === 'save' ? <LoaderCircle className="animate-spin" /> : editing ? <Check /> : <Plus />}{editing ? '保存' : '添加'}</Button></DialogFooter>
+    </form></DialogContent>
+  </Dialog>;
+}
+
 function BackendsSection({ notify }) {
   const [data, setData] = useState({ backends: [], reverseBase: '' });
   const [busy, setBusy] = useState('');
   const [connect, setConnect] = useState(null);
-  const [adding, setAdding] = useState(null);
-  const [form, setForm] = useState({ name: '', url: '', token: '', buildToken: '', fingerprint: '' });
+  const [adding, setAdding] = useState(false);
+  const [forward, setForward] = useState(null); // { editing } while the forward dialog is open
+  const [name, setName] = useState('');
   const load = async () => { try { setData(await api('/api/backends')); } catch (error) { notify(error.message, true); } };
   useEffect(() => { load(); const timer = setInterval(load, 10000); return () => clearInterval(timer); }, []);
   const act = async (key, run) => { setBusy(key); try { await run(); await load(); } catch (error) { notify(error.message, true); } finally { setBusy(''); } };
   const create = event => {
     event.preventDefault();
     act('create', async () => {
-      const body = adding === 'reverse' ? { type: 'reverse', name: form.name } : { type: 'forward', ...form };
-      const result = await api('/api/backends', { method: 'POST', body: JSON.stringify(body) });
-      setAdding(null); setForm({ name: '', url: '', token: '', buildToken: '', fingerprint: '' });
-      if (result.url) setConnect(result); else notify('后端已添加');
+      const result = await api('/api/backends', { method: 'POST', body: JSON.stringify({ type: 'reverse', name }) });
+      setAdding(false); setName('');
+      setConnect(result);
     });
   };
   const rotate = backend => { if (!confirm(`重置“${backend.name}”的 token？正在运行的 miaospeed 需要用新命令重新启动。`)) return; act(backend.id, async () => setConnect(await api(`/api/backends/${backend.id}/rotate`, { method: 'POST', body: '{}' }))); };
   const remove = backend => { if (!confirm(`删除后端“${backend.name}”？`)) return; act(backend.id, () => api(`/api/backends/${backend.id}`, { method: 'DELETE' })); };
-  const toggle = backend => act(backend.id, () => api(`/api/backends/${backend.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: !backend.enabled }) }));
-  const field = key => ({ value: form[key], onChange: e => setForm(current => ({ ...current, [key]: e.target.value })) });
+  const patch = (backend, body) => act(backend.id, () => api(`/api/backends/${backend.id}`, { method: 'PATCH', body: JSON.stringify(body) }));
+  const toggle = backend => {
+    if (backend.type === 'local' && backend.enabled && !confirm('停用本机 miaospeed？进程会被停止，重新启用后自动启动。')) return;
+    patch(backend, { enabled: !backend.enabled });
+  };
   return <section className="border-b pb-8 pt-8">
     <div className="mb-2 flex items-center gap-2"><Cable className="size-4" /><h2 className="text-base font-semibold">miaospeed 后端</h2></div>
-    <p className="mb-5 text-sm text-muted-foreground">深度测试在这些后端上运行。正向：填写已有 miaospeed 的地址和 token（例如给 Koipy 用的后端）；反向：在 NAT 后的机器上运行 miaospeed，主动连接主控 {data.reverseBase && <span className="font-mono text-xs">{data.reverseBase}</span>}。</p>
-    <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[680px] text-sm">
-      <thead className="bg-muted/60 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-2.5 font-medium">名称</th><th className="px-4 py-2.5 font-medium">类型</th><th className="px-4 py-2.5 font-medium">状态</th><th className="px-4 py-2.5 font-medium">版本 / 地址</th><th className="px-4 py-2.5 font-medium">启用</th><th className="w-24 px-3 py-2.5"></th></tr></thead>
-      <tbody>{data.backends.length === 0 && <EmptyRow columns={6}>没有可用后端（本机 miaospeed 未安装）</EmptyRow>}{data.backends.map(backend => <tr key={backend.id} className="border-t">
+    <p className="mb-5 text-sm text-muted-foreground">深度测试在这些后端上运行。正向：填写已有 miaospeed 的地址和 token（例如给 Koipy 用的后端），可配置 mTLS；反向：在 NAT 后的机器上运行 miaospeed，主动连接主控 {data.reverseBase && <span className="font-mono text-xs">{data.reverseBase}</span>}。「启用」关闭后该后端不再被使用；「巡检」只控制是否参与定时巡检。</p>
+    <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[760px] text-sm">
+      <thead className="bg-muted/60 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-2.5 font-medium">名称</th><th className="px-4 py-2.5 font-medium">类型</th><th className="px-4 py-2.5 font-medium">状态</th><th className="px-4 py-2.5 font-medium">版本 / 地址</th><th className="px-4 py-2.5 font-medium">启用</th><th className="px-4 py-2.5 font-medium">巡检</th><th className="w-28 px-3 py-2.5"></th></tr></thead>
+      <tbody>{data.backends.length === 0 && <EmptyRow columns={7}>没有可用后端（本机 miaospeed 未安装）</EmptyRow>}{data.backends.map(backend => <tr key={backend.id} className="border-t">
         <td className="px-4 py-3"><div className="font-medium">{backend.name}</div><div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{backend.id}</div></td>
-        <td className="px-4 py-3"><Badge variant="outline">{backendTypeLabels[backend.type]}</Badge></td>
-        <td className="px-4 py-3"><BackendState backend={backend} />{backend.type === 'reverse' && !backend.online && backend.lastSeen && <div className="mt-1 text-[11px] text-muted-foreground">最后在线 {formatTime(backend.lastSeen)}</div>}</td>
+        <td className="px-4 py-3"><div className="flex flex-wrap gap-1"><Badge variant="outline">{backendTypeLabels[backend.type]}</Badge>{backend.mtls && <Tooltip content="出示客户端证书（mTLS）"><span><Badge variant="outline">mTLS</Badge></span></Tooltip>}{(backend.pinned || backend.customCa) && <Tooltip content={backend.pinned ? '固定证书指纹' : '自定义 CA'}><span><Badge variant="outline">{backend.pinned ? '指纹' : 'CA'}</Badge></span></Tooltip>}</div></td>
+        <td className="whitespace-nowrap px-4 py-3"><BackendState backend={backend} />{backend.type === 'reverse' && !backend.online && backend.lastSeen && <div className="mt-1 text-[11px] text-muted-foreground">最后在线 {formatTime(backend.lastSeen)}</div>}</td>
         <td className="px-4 py-3 font-mono text-xs text-muted-foreground"><div>{backend.version || '-'}</div><div className="max-w-64 truncate">{backend.url || backend.remote || ''}</div></td>
-        <td className="px-4 py-3">{backend.type !== 'local' ? <Switch checked={backend.enabled} onCheckedChange={() => toggle(backend)} disabled={busy === backend.id} aria-label="启用后端" /> : <span className="text-muted-foreground">-</span>}</td>
-        <td className="px-3 py-3">{backend.type !== 'local' && <div className="flex justify-end gap-1">{backend.type === 'reverse' && <Tooltip content="重置 token"><Button size="icon" variant="ghost" onClick={() => rotate(backend)} disabled={Boolean(busy)}><KeyRound /></Button></Tooltip>}<Tooltip content="删除"><Button size="icon" variant="ghost" onClick={() => remove(backend)} disabled={Boolean(busy)}><Trash2 /></Button></Tooltip></div>}</td>
+        <td className="px-4 py-3"><Switch checked={backend.enabled} onCheckedChange={() => toggle(backend)} disabled={busy === backend.id} aria-label={`启用 ${backend.name}`} /></td>
+        <td className="px-4 py-3"><Switch checked={backend.monitor !== false} onCheckedChange={() => patch(backend, { monitor: backend.monitor === false })} disabled={busy === backend.id || !backend.enabled} aria-label={`${backend.name} 参与定时巡检`} /></td>
+        <td className="px-3 py-3">{backend.type !== 'local' && <div className="flex justify-end gap-1">{backend.type === 'forward' && <Tooltip content="编辑（地址、token、TLS）"><Button size="icon" variant="ghost" onClick={() => setForward({ editing: backend })} disabled={Boolean(busy)}><Pencil /></Button></Tooltip>}{backend.type === 'reverse' && <Tooltip content="重置 token"><Button size="icon" variant="ghost" onClick={() => rotate(backend)} disabled={Boolean(busy)}><KeyRound /></Button></Tooltip>}<Tooltip content="删除"><Button size="icon" variant="ghost" onClick={() => remove(backend)} disabled={Boolean(busy)}><Trash2 /></Button></Tooltip></div>}</td>
       </tr>)}</tbody>
     </table></div>
-    <div className="mt-4 flex flex-wrap gap-2"><Button variant="outline" onClick={() => setAdding('reverse')}><Plus />添加反向后端</Button><Button variant="outline" onClick={() => setAdding('forward')}><Plus />添加正向后端</Button></div>
-    <Dialog open={Boolean(adding)} onOpenChange={open => { if (!open) setAdding(null); }}>
-      <DialogContent><form onSubmit={create} className="grid gap-4"><DialogHeader><DialogTitle>{adding === 'reverse' ? '添加反向后端' : '添加正向后端'}</DialogTitle><DialogDescription>{adding === 'reverse' ? '创建后会给出在目标机器上运行 miaospeed 的命令。' : '主控主动连接一个已在运行的 miaospeed server。'}</DialogDescription></DialogHeader>
-        <label className="grid gap-2 text-sm font-medium">名称<Input {...field('name')} placeholder="例如：上海联通" maxLength={40} required /></label>
-        {adding === 'forward' && <>
-          <label className="grid gap-2 text-sm font-medium">地址<Input {...field('url')} placeholder="wss://example.com:8765/path" required /></label>
-          <label className="grid gap-2 text-sm font-medium">token<Input {...field('token')} type="password" autoComplete="off" required /></label>
-          <label className="grid gap-2 text-sm font-medium">证书指纹（可选，自签证书时填写 SHA-256）<Input {...field('fingerprint')} placeholder="留空则按域名校验证书" /></label>
-          <label className="grid gap-2 text-sm font-medium">编译 token（可选，自行编译的 miaospeed 才需要）<Input {...field('buildToken')} autoComplete="off" /></label>
-        </>}
-        <DialogFooter><Button type="button" variant="outline" onClick={() => setAdding(null)}>取消</Button><Button disabled={busy === 'create'}>{busy === 'create' ? <LoaderCircle className="animate-spin" /> : <Plus />}添加</Button></DialogFooter>
+    <div className="mt-4 flex flex-wrap gap-2"><Button variant="outline" onClick={() => setAdding(true)}><Plus />添加反向后端</Button><Button variant="outline" onClick={() => setForward({ editing: null })}><Plus />添加正向后端</Button></div>
+    <Dialog open={adding} onOpenChange={open => { if (!open) setAdding(false); }}>
+      <DialogContent><form onSubmit={create} className="grid gap-4"><DialogHeader><DialogTitle>添加反向后端</DialogTitle><DialogDescription>创建后会给出在目标机器上运行 miaospeed 的命令。</DialogDescription></DialogHeader>
+        <label className="grid gap-2 text-sm font-medium">名称<Input value={name} onChange={e => setName(e.target.value)} placeholder="例如：上海联通" maxLength={40} required /></label>
+        <DialogFooter><Button type="button" variant="outline" onClick={() => setAdding(false)}>取消</Button><Button disabled={busy === 'create'}>{busy === 'create' ? <LoaderCircle className="animate-spin" /> : <Plus />}添加</Button></DialogFooter>
       </form></DialogContent>
     </Dialog>
+    <ForwardDialog open={Boolean(forward)} editing={forward?.editing || null} onClose={() => setForward(null)} onSaved={() => { setForward(null); load(); }} notify={notify} />
     <Dialog open={Boolean(connect)} onOpenChange={open => { if (!open) setConnect(null); }}>
       <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>部署后端：{connect?.backend?.name}</DialogTitle><DialogDescription>在目标机器上运行下面任一命令，miaospeed 连上主控后即可在深度测试中选择它。</DialogDescription></DialogHeader>{connect && <ConnectDetails info={connect} notify={notify} />}<DialogFooter><Button onClick={() => setConnect(null)}>完成</Button></DialogFooter></DialogContent>
     </Dialog>
@@ -205,10 +310,11 @@ function BackendsSection({ notify }) {
 const presetIcons = { latency: Timer, speed: Gauge, topology: Network, unlock: LockOpen };
 const presetHints = {
   latency: '延迟RTT / HTTP延迟 / UDP NAT 类型',
-  speed: '下载测速 + 延迟 + UDP 类型',
+  speed: '单 / 多线程下载、上传测速 + 延迟 + UDP 类型',
   topology: '入口与出口的地区、ASN、组织，按落地 IP 聚类',
   unlock: '「设置 → 解锁检测」中选择的服务 + 出口地区，FullTClash 风格连通性报告'
 };
+const speedModeLabels = { 'download-single': '单线程下载', 'download-multi': '多线程下载', 'upload-single': '单线程上传', 'upload-multi': '多线程上传' };
 const statusLabels = { running: '进行中', completed: '完成', failed: '失败', cancelled: '已取消' };
 const statusVariants = { running: 'outline', completed: 'success', failed: 'danger', cancelled: 'warning' };
 
@@ -219,7 +325,11 @@ function DeepTestView({ subscriptions, imports, notify }) {
   const [sourceId, setSourceId] = useState('');
   const [include, setInclude] = useState('');
   const [exclude, setExclude] = useState('');
-  const [speed, setSpeed] = useState({ downloadDuration: 5, downloadThreading: 1, downloadSource: 'auto' });
+  const [speed, setSpeed] = useState(() => {
+    const stored = { duration: 5, multiThreads: 8, downloadSource: 'auto', uploadSource: 'auto', ...readStoredJSON('nw-deep-speed') };
+    return { ...stored, modes: Array.isArray(stored.modes) ? stored.modes.filter(mode => speedModeLabels[mode]) : ['download-single'] };
+  });
+  const toggleMode = mode => setSpeed(s => ({ ...s, modes: s.modes.includes(mode) ? s.modes.filter(item => item !== mode) : [...s.modes, mode] }));
   const [viewId, setViewId] = useState(null);
   const [sort, setSort] = useState('');
   const [busy, setBusy] = useState(false);
@@ -236,10 +346,11 @@ function DeepTestView({ subscriptions, imports, notify }) {
   const backend = backends.find(item => item.id === backendId) || backends.find(item => item.online) || backends[0];
   const shown = data.history.find(item => item.id === viewId) || data.history[0];
   const start = async () => {
-    if (preset === 'speed' && !confirm('测速会消耗大量流量（每个节点约 时长 × 带宽，千兆节点 5 秒约 600MB），确定开始？')) return;
+    if (preset === 'speed' && !speed.modes.length) return notify('至少选择一种测速方式', true);
+    if (preset === 'speed' && !confirm(`测速会消耗大量流量（每个节点每轮约 时长 × 带宽，千兆节点 5 秒约 600MB），本次共 ${speed.modes.length} 轮，确定开始？`)) return;
     setBusy(true);
     try {
-      writeStored('nw-deep-preset', preset); if (backend) writeStored('nw-deep-backend', backend.id);
+      writeStored('nw-deep-preset', preset); if (backend) writeStored('nw-deep-backend', backend.id); if (preset === 'speed') writeStored('nw-deep-speed', JSON.stringify(speed));
       await api('/api/deep-tests', { method: 'POST', body: JSON.stringify({ preset, backendId: backend?.id, sourceId: sourceId || undefined, include, exclude, options: preset === 'speed' ? speed : {} }) });
       setViewId(null); await load();
     } catch (error) { notify(error.message, true); } finally { setBusy(false); }
@@ -261,17 +372,23 @@ function DeepTestView({ subscriptions, imports, notify }) {
         <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">包含（关键字或正则）<Input value={include} onChange={e => setInclude(e.target.value)} placeholder="例如：香港|HK" disabled={running} /></label>
         <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">排除<Input value={exclude} onChange={e => setExclude(e.target.value)} placeholder="例如：剩余|到期" disabled={running} /></label>
       </div>
-      {preset === 'speed' && <div className="grid gap-3 sm:grid-cols-3">
-        <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">每节点时长（秒）<Input type="number" min={1} max={30} value={speed.downloadDuration} onChange={e => setSpeed(s => ({ ...s, downloadDuration: Number(e.target.value) }))} disabled={running} /></label>
-        <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">线程<Input type="number" min={1} max={32} value={speed.downloadThreading} onChange={e => setSpeed(s => ({ ...s, downloadThreading: Number(e.target.value) }))} disabled={running} /></label>
-        <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">测速文件<Select value={speed.downloadSource} onChange={value => setSpeed(s => ({ ...s, downloadSource: value }))} disabled={running}>{(data.downloadSources.length ? data.downloadSources : ['auto']).map(key => <option key={key} value={key}>{{ auto: '自动（微软/谷歌）', fast: 'Fast.com', cloudflare: 'Cloudflare', cachefly: 'CacheFly' }[key] || key}</option>)}</Select></label>
+      {preset === 'speed' && <div className="grid gap-3">
+        <div className="flex flex-wrap gap-x-5 gap-y-2">{Object.entries(speedModeLabels).map(([mode, label]) => <label key={mode} className="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" className="size-4 accent-zinc-900" checked={speed.modes.includes(mode)} onChange={() => toggleMode(mode)} disabled={running} />{mode.endsWith('multi') ? label.replace('多', `${speed.multiThreads || 8} `) : label}</label>)}</div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">每节点每轮时长（秒）<Input type="number" min={1} max={30} value={speed.duration} onChange={e => setSpeed(s => ({ ...s, duration: Number(e.target.value) }))} disabled={running} /></label>
+          <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">多线程数<Input type="number" min={2} max={32} value={speed.multiThreads} onChange={e => setSpeed(s => ({ ...s, multiThreads: Number(e.target.value) }))} disabled={running} /></label>
+          <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">下载测速文件<Select value={speed.downloadSource} onChange={value => setSpeed(s => ({ ...s, downloadSource: value }))} disabled={running}>{(data.downloadSources.length ? data.downloadSources : ['auto']).map(key => <option key={key} value={key}>{{ auto: '自动（微软/谷歌）', fast: 'Fast.com', cloudflare: 'Cloudflare', cachefly: 'CacheFly' }[key] || key}</option>)}</Select></label>
+          <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">上传地址<Select value={speed.uploadSource} onChange={value => setSpeed(s => ({ ...s, uploadSource: value }))} disabled={running}>{(data.uploadSources?.length ? data.uploadSources : ['auto']).map(key => <option key={key} value={key}>{{ auto: '自动（Cloudflare）', cloudflare: 'Cloudflare' }[key] || key}</option>)}</Select></label>
+        </div>
+        {speed.modes.some(mode => mode.startsWith('upload')) && <p className="text-xs text-muted-foreground">上传测速需要后端以 <code className="font-mono">-upload</code> 启动：本机 miaospeed 和面板生成的部署命令已带上；其他后端（例如给 Koipy 用的）请自行加上该参数。</p>}
       </div>}
       <div className="flex flex-wrap items-center gap-2">
         {running ? <Button variant="outline" onClick={cancel}><Square />停止</Button> : <Button onClick={start} disabled={busy || !backend}>{busy ? <LoaderCircle className="animate-spin" /> : <Play />}开始测试</Button>}
         {preset === 'speed' && !running && <span className="text-xs text-amber-700">测速会消耗大量流量，请勿频繁运行</span>}
       </div>
-      {current && running && <div className="rounded-md border bg-muted/40 p-3"><div className="flex items-center justify-between text-sm"><span className="flex min-w-0 items-center gap-2"><LoaderCircle className="size-4 shrink-0 animate-spin" /><span className="truncate">{current.backend.name} · {current.label} · {current.current ? `已完成 ${current.current}` : current.queuing ? `排队中（前面 ${current.queuing} 个任务）` : '等待结果'}</span></span><span className="ml-4 shrink-0 font-mono text-xs">{current.completed}/{current.total}</span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200"><div className="h-full bg-zinc-800 transition-all" style={{ width: `${current.total ? current.completed / current.total * 100 : 0}%` }} /></div></div>}
+      {current && running && <div className="rounded-md border bg-muted/40 p-3"><div className="flex items-center justify-between text-sm"><span className="flex min-w-0 items-center gap-2"><LoaderCircle className="size-4 shrink-0 animate-spin" /><span className="truncate">{current.backend.name} · {current.label}{current.stage && current.stage.count > 1 ? ` · 第 ${current.stage.index}/${current.stage.count} 轮 ${current.stage.label}` : ''} · {current.current ? `已完成 ${current.current}` : current.queuing ? `排队中（前面 ${current.queuing} 个任务）` : '等待结果'}</span></span><span className="ml-4 shrink-0 font-mono text-xs">{current.completed}/{current.total}</span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200"><div className="h-full bg-zinc-800 transition-all" style={{ width: `${current.total ? current.completed / current.total * 100 : 0}%` }} /></div></div>}
       {current && !running && current.status === 'failed' && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">上次测试失败：{current.error}</div>}
+      {current && current.warnings?.length > 0 && <div className="grid gap-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{current.warnings.map(text => <div key={text}>{text}</div>)}</div>}
     </section>
     {shown && <section>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
