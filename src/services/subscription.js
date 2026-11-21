@@ -45,12 +45,6 @@ class SubscriptionService {
     return String((await this.fetchResponse(url)).data || '');
   }
 
-  // Content plus the traffic info airports send in `subscription-userinfo`.
-  async fetchWithInfo(url) {
-    const response = await this.fetchResponse(url);
-    return { content: String(response.data || ''), userinfo: parseUserinfo(response.headers?.['subscription-userinfo']) };
-  }
-
   async getNodes(subscriptionUrl) {
     const content = await this.fetchSubscription(subscriptionUrl);
     const result = nodeParser.parseContent(content);
