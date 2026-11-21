@@ -26,10 +26,6 @@ class ProbeRegistry {
     return this.list().find(item => item.id === id) || null;
   }
 
-  isLocal(id) {
-    return id === LOCAL_ID;
-  }
-
   defaultProbeId() {
     const items = this.list().filter(item => item.enabled && item.monitor !== false);
     return (items.find(item => item.online) || items[0])?.id || LOCAL_ID;
