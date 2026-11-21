@@ -343,10 +343,6 @@ class BackendManager extends EventEmitter {
 
   // --- reverse endpoint ------------------------------------------------------------------------
 
-  isReversePath(url) {
-    return String(url || '').startsWith(REVERSE_PREFIX);
-  }
-
   // http(s) 'upgrade' handler. Returns false when the request is not for us.
   handleUpgrade(req, socket, head) {
     const pathname = String(req.url || '').split('?')[0];
