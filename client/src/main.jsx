@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity, Bell, Cable, Check, ChevronDown, Copy, Download, FileImage, Gauge, Globe2, Import, KeyRound,
-  LoaderCircle, LockKeyhole, LockOpen, LogIn, LogOut, Mail, Network, Pencil, Play, Plus, Radar, RefreshCw, ScrollText, Search,
+  LoaderCircle, LockKeyhole, LockOpen, LogIn, LogOut, Mail, Network, Pencil, Play, Plus, RefreshCw, ScrollText, Search,
   Send, Server, Settings2, ShieldCheck, Smartphone, Square, Timer, Trash2, WandSparkles, X, Zap
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
